@@ -260,6 +260,12 @@ async function saveDescriptorToDB(
   descriptor: Float32Array
 ): Promise<boolean> {
   try {
+    // Удаляем существующий дескриптор для этого фото перед созданием нового —
+    // предотвращает накопление дублей при повторных импортах и reindex.
+    await prisma.faceDescriptor.deleteMany({
+      where: { person_id: personId, photo_path: photoPath },
+    });
+
     // Пробуем бинарный формат, fallback на JSON при ошибке
     try {
       const binaryData = descriptorToBase64(descriptor);

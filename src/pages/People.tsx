@@ -75,13 +75,13 @@ export default function People() {
   const fetchPeople = useCallback(async () => {
     setLoading(true)
     try {
-      const params = new URLSearchParams()
-      if (search) params.set('search', search)
-      if (filterCat) params.set('category', filterCat)
-      params.set('sort_by', sortBy)
-      params.set('sort_dir', sortDir)
-      params.set('limit', '500')  // достаточно для большинства баз
-      const data = await apiFetch<Person[]>(`/persons/?${params}`)
+      const queryParts: string[] = []
+      if (search) queryParts.push(`search=${encodeURIComponent(search)}`)
+      if (filterCat) queryParts.push(`category=${encodeURIComponent(filterCat)}`)
+      queryParts.push(`sort_by=${encodeURIComponent(sortBy)}`)
+      queryParts.push(`sort_dir=${encodeURIComponent(sortDir)}`)
+      queryParts.push('limit=500')
+      const data = await apiFetch<Person[]>(`/persons/?${queryParts.join('&')}`)
       setPeople(data)
     } catch (e) {
       console.error(e)
@@ -657,6 +657,8 @@ function PersonProfile({ person, onClose, onEdit }: {
   const [showVisits, setShowVisits] = useState(false)
   const [showContacts, setShowContacts] = useState(true)
   const [showAllPhotos, setShowAllPhotos] = useState(false)
+  const [reindexing, setReindexing] = useState(false)
+  const [reindexResult, setReindexResult] = useState<{ ok: boolean; registered: number; failed: number; errors: string[] } | null>(null)
 
   const load = useCallback(() => {
     apiFetch<Person>(`/persons/${person.id}`).then(setFull).catch(() => setFull(person))
@@ -670,6 +672,23 @@ function PersonProfile({ person, onClose, onEdit }: {
 
   useEffect(() => { load() }, [load])
   const d = full ?? person
+
+  const handleReindex = async () => {
+    setReindexing(true)
+    setReindexResult(null)
+    try {
+      const res = await apiFetch<{ ok: boolean; registered: number; failed: number; errors: string[] }>(
+        `/persons/${person.id}/reindex`,
+        { method: 'POST' }
+      )
+      setReindexResult(res)
+      load() // обновляем профиль — embedding_count изменился
+    } catch (e: any) {
+      setReindexResult({ ok: false, registered: 0, failed: 0, errors: [e.message] })
+    } finally {
+      setReindexing(false)
+    }
+  }
 
   const addTag = async (tag: string) => { await apiFetch(`/loyalty/${person.id}/tags`, { method:'POST', body: JSON.stringify({ tag }) }); load() }
   const removeTag = async (id: number) => { await apiFetch(`/loyalty/${person.id}/tags/${id}`, { method:'DELETE' }); load() }
@@ -695,9 +714,29 @@ function PersonProfile({ person, onClose, onEdit }: {
           {(d as any).position && <div className="text-kraken-purple text-xs font-medium truncate">💼 {(d as any).position}</div>}
           {d.organization && !((d as any).position) && <div className="text-kraken-muted text-xs truncate">{d.organization}</div>}
         </div>
+        <button
+          onClick={handleReindex}
+          disabled={reindexing}
+          title="Переиндексировать эмбеддинги"
+          className="p-1.5 rounded hover:bg-kraken-hover text-kraken-muted hover:text-kraken-green disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw size={14} className={reindexing ? 'animate-spin text-kraken-green' : ''} />
+        </button>
         <button onClick={onEdit} className="p-1.5 rounded hover:bg-kraken-hover text-kraken-muted hover:text-kraken-purple" title="Редактировать"><Edit2 size={14} /></button>
         <button onClick={onClose} className="p-1.5 rounded hover:bg-kraken-hover text-kraken-muted hover:text-kraken-text"><X size={14} /></button>
       </div>
+
+      {/* Результат переиндексации */}
+      {reindexResult && (
+        <div className={`px-4 py-2 flex items-center justify-between text-xs flex-shrink-0 border-b border-kraken-border ${reindexResult.ok && reindexResult.failed === 0 ? 'bg-kraken-green/10 text-kraken-green' : 'bg-amber-400/10 text-amber-400'}`}>
+          <span>
+            {reindexResult.ok
+              ? `Переиндексировано: ✅ ${reindexResult.registered} эмб.${reindexResult.failed > 0 ? ` / ⚠ ${reindexResult.failed} не удалось` : ''}`
+              : `Ошибка: ${reindexResult.errors[0] || 'неизвестная ошибка'}`}
+          </span>
+          <button onClick={() => setReindexResult(null)} className="ml-2 opacity-60 hover:opacity-100"><X size={11} /></button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {d.photos && d.photos.length > 0 && (

@@ -927,22 +927,37 @@ app.get(["/api/persons", "/api/persons/"], async (req, res) => {
 
     const where: any = {};
     if (category) where.category = category;
+    let personsFromDB: any[];
     if (search) {
-      // SQLite не поддерживает mode:'insensitive' — убираем, contains в SQLite
-      // регистронезависим для ASCII; для кириллицы достаточно просто contains
-      where.OR = [
-        { name: { contains: search } },
-        { comment: { contains: search } },
-        { organization: { contains: search } },
-        { position: { contains: search } },
-      ];
+      // SQLite не поддерживает mode:'insensitive' для кириллицы.
+      // Загружаем всех (или по категории) и фильтруем в JS с LOWER().
+      const whereAll: any = {};
+      if (category) whereAll.category = category;
+      const allPersons = await prisma.person.findMany({
+        where: whereAll,
+        include: { photos: true },
+        orderBy: { [sort_by]: sort_dir },
+        take: 500,
+      });
+      const s = search.toLowerCase();
+      personsFromDB = allPersons.filter((p: any) =>
+        (p.name        || '').toLowerCase().includes(s) ||
+        (p.comment     || '').toLowerCase().includes(s) ||
+        (p.organization|| '').toLowerCase().includes(s) ||
+        (p.position    || '').toLowerCase().includes(s) ||
+        (p.email       || '').toLowerCase().includes(s) ||
+        (p.phone       || '').toLowerCase().includes(s)
+      );
+    } else {
+      const where: any = {};
+      if (category) where.category = category;
+      personsFromDB = await prisma.person.findMany({
+        where,
+        include: { photos: true },
+        orderBy: { [sort_by]: sort_dir },
+        take: 500,
+      });
     }
-
-    const personsFromDB = await prisma.person.findMany({
-      where,
-      include: { photos: true },
-      orderBy: { [sort_by]: sort_dir }
-    });
 
     res.json(personsFromDB);
   } catch (err) {

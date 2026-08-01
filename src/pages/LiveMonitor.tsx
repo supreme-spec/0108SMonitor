@@ -403,9 +403,9 @@ export default function LiveMonitor({
   const fetchPeople = useCallback(async () => {
     setLoadingPeople(true)
     try {
-      const params = new URLSearchParams()
-      if (search) params.set('search', search)
-      const data = await apiFetch<Person[]>(`/persons/?${params}`)
+      const queryParts: string[] = []
+      if (search) queryParts.push(`search=${encodeURIComponent(search)}`)
+      const data = await apiFetch<Person[]>(`/persons/?${queryParts.join('&')}`)
       setPeople(data)
     } catch {}
     finally { setLoadingPeople(false) }
