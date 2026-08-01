@@ -304,6 +304,8 @@ app.post(["/api/cameras/:id/stop", "/api/cameras/:id/stop/"], async (req, res) =
       cameraStreams.delete(id);
     }
 
+    stopCameraPipeline(id);
+
     res.json({ success: true, status: "offline", camera: sanitizeCamera(updated) });
   } catch (err) {
     res.status(404).json({ detail: "Camera not found" });
@@ -692,6 +694,15 @@ app.put("/api/cameras/:id", async (req, res) => {
 app.delete(["/api/cameras/:id", "/api/cameras/:id/"], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+
+    const streams = cameraStreams.get(id);
+    if (streams) {
+      for (const ws of streams) { try { ws.close(); } catch {} }
+      cameraStreams.delete(id);
+    }
+
+    stopCameraPipeline(id);
+
     await prisma.camera.delete({ where: { id } });
     cameras = cameras.filter((c) => c.id !== id);
     res.json({ success: true });
