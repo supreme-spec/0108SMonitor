@@ -750,6 +750,24 @@ app.delete(["/api/cameras/:id", "/api/cameras/:id/"], async (req, res) => {
 
     stopCameraPipeline(id);
 
+    // Clean up physical files (snapshots, recordings) for this camera's events/recordings
+    const [events, recordings] = await Promise.all([
+      prisma.event.findMany({ where: { camera_id: id }, select: { snapshot_path: true } }),
+      prisma.recording.findMany({ where: { camera_id: id }, select: { video_path: true } }),
+    ]);
+    for (const event of events) {
+      if (event.snapshot_path) {
+        const fullPath = path.join(publicDir, event.snapshot_path);
+        try { if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath); } catch { /* ignore */ }
+      }
+    }
+    for (const recording of recordings) {
+      if (recording.video_path) {
+        const fullPath = path.join(publicDir, recording.video_path);
+        try { if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath); } catch { /* ignore */ }
+      }
+    }
+
     await prisma.camera.delete({ where: { id } });
     cameras = cameras.filter((c) => c.id !== id);
     res.json({ success: true });
@@ -910,10 +928,13 @@ app.get(["/api/persons", "/api/persons/"], async (req, res) => {
     const where: any = {};
     if (category) where.category = category;
     if (search) {
+      // SQLite не поддерживает mode:'insensitive' — убираем, contains в SQLite
+      // регистронезависим для ASCII; для кириллицы достаточно просто contains
       where.OR = [
-        { name: { contains: search, mode: "insensitive" } },
-        { comment: { contains: search, mode: "insensitive" } },
-        { organization: { contains: search, mode: "insensitive" } },
+        { name: { contains: search } },
+        { comment: { contains: search } },
+        { organization: { contains: search } },
+        { position: { contains: search } },
       ];
     }
 
