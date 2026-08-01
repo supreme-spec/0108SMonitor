@@ -7,9 +7,30 @@ Optimized for 10,000+ persons with FAISS exact search (IndexFlatIP).
 
 import asyncio
 import os
+import sys
 import io
 import json
 import logging
+
+# ─── CUDA DLL PATH FIX ──────────────────────────────────────────────────
+# onnxruntime-gpu needs CUDA/cuDNN DLLs from pip-installed nvidia-* packages.
+# On Windows, LoadLibrary doesn't search Python's site-packages automatically.
+_nvidia_pkg_dir = os.path.join(sys.prefix, "Lib", "site-packages", "nvidia")
+if os.path.isdir(_nvidia_pkg_dir):
+    _bin_dirs = [os.path.join(_nvidia_pkg_dir, p, "bin") for p in os.listdir(_nvidia_pkg_dir) if os.path.isdir(os.path.join(_nvidia_pkg_dir, p, "bin"))]
+    _path = os.environ.get("PATH", "")
+    for _bd in _bin_dirs:
+        if _bd not in _path:
+            _path = _bd + os.pathsep + _path
+    os.environ["PATH"] = _path
+    # Also set DLL directory for Windows LoadLibrary (needed for DLL dependencies)
+    try:
+        import ctypes
+        _scripts_dir = os.path.join(sys.prefix, "Scripts")
+        ctypes.windll.kernel32.SetDllDirectoryA(_scripts_dir)
+    except Exception:
+        pass
+
 import sqlite3
 import base64
 import time
@@ -66,6 +87,13 @@ DB_PATH: str = os.getenv("DB_PATH", "prisma/dev.db")
 
 logging.basicConfig(level=logging.INFO, format="[FaceEngine] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# Файловый лог для диагностики ошибок (особенно 500)
+_log_file = Path(__file__).parent / "logs" / "face_server.log"
+_log_file.parent.mkdir(exist_ok=True)
+_file_handler = logging.FileHandler(_log_file, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s"))
+logger.addHandler(_file_handler)
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -163,6 +191,14 @@ def initialize_face_engine() -> Tuple[Any, str]:
                 name="buffalo_l", root=str(MODELS_DIR), providers=target_providers
             )
             app_instance.prepare(ctx_id=0, det_size=(640, 640))
+            # Test inference to verify GPU actually works (catches cuDNN/LoadLibrary errors
+            # that only manifest during model execution, not during prepare)
+            try:
+                _test_img = np.zeros((640, 640, 3), dtype=np.uint8)
+                _test_img[:] = 128
+                _ = app_instance.get(_test_img)
+            except Exception as test_err:
+                raise RuntimeError(f"GPU test inference failed: {test_err}")
             used_provider_local = target_providers[0]
             logger.info(f"InsightFace loaded on {used_provider_local}.")
             return app_instance, used_provider_local
@@ -330,14 +366,25 @@ if is_initialized:
 # ─── Image Helpers ────────────────────────────────────────────────────────────
 
 def load_image_from_bytes(data: bytes) -> Optional[np.ndarray]:
-    """Decodes image bytes to RGB numpy array."""
+    """Decodes image bytes to RGB numpy array. Handles EXIF rotation and CMYK/P modes."""
     if not data:
         return None
     try:
         img = Image.open(io.BytesIO(data))
-        img_rgb = np.array(img.convert("RGB"))
+        # Применяем EXIF-ориентацию (иначе rotated фото с телефона могут крашить face_app.get)
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        # Конвертируем любой режим в RGB (CMYK, P, LA, RGBA и т.д.)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img_rgb = np.array(img)
     except Exception as e:
         logger.error(f"Image decode failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     if img_rgb.size == 0:
         return None
@@ -635,7 +682,13 @@ async def detect_faces(
             raise HTTPException(status_code=400, detail="Empty or invalid image")
 
         threshold = min_confidence if min_confidence is not None else MIN_DETECTION_SCORE
-        faces = face_app.get(img)
+        try:
+            faces = face_app.get(img)
+        except Exception as face_err:
+            logger.error(f"face_app.get() crashed in detect-faces: {face_err}, img shape={img.shape}, dtype={img.dtype}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
         results: List[Dict[str, Any]] = []
 
         for face in faces[:max_faces]:
@@ -699,7 +752,13 @@ async def assess_quality(image: UploadFile = File(...)):
                 "faces": [],
             }
 
-        faces = face_app.get(img)
+        try:
+            faces = face_app.get(img)
+        except Exception as face_err:
+            logger.error(f"face_app.get() crashed in assess-quality: {face_err}, img shape={img.shape}, dtype={img.dtype}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
         face_count = len(faces)
         valid_faces = [f for f in faces if passes_quality_gate(f)]
 
@@ -776,7 +835,14 @@ async def get_embedding(
         if img is None or img.size == 0:
             raise HTTPException(status_code=400, detail="Empty or invalid image")
 
-        faces = face_app.get(img)
+        try:
+            faces = face_app.get(img)
+        except Exception as face_err:
+            logger.error(f"face_app.get() crashed: {face_err}, img shape={img.shape}, dtype={img.dtype}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
+
         if not faces:
             return {"descriptor": None, "error": "No face detected", "quality": None, "issues": ["Лицо не обнаружено"]}
 

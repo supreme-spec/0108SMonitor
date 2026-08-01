@@ -4,6 +4,7 @@ import { platform } from "os";
 import fs from "fs";
 import http from "http";
 import multer from "multer";
+import iconv from "iconv-lite";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn, exec, ChildProcessWithoutNullStreams } from "child_process";
@@ -163,6 +164,52 @@ const upload = multer({
     }
   },
 });
+
+// ── Утилиты нормализации и кодировки (для импорта людей) ──
+// Браузер на Windows передаёт originalname в latin1, а не UTF-8.
+// Multer не перекодирует это — отсюда кракозябры в именах.
+function fixDoubleEncodedCyrillic(value: string): string {
+  if (typeof value !== 'string' || !value) return value;
+  if (/[а-яА-ЯёЁ]/.test(value)) return value; // уже нормальная кириллица
+  try {
+    const decoded = iconv.decode(Buffer.from(value, 'latin1'), 'utf8');
+    if (decoded && /[а-яА-ЯёЁ]/.test(decoded)) return decoded;
+  } catch {}
+  return value;
+}
+
+function fixFilesEncoding(files: Express.Multer.File[]): void {
+  if (!files || !Array.isArray(files)) return;
+  for (const file of files) {
+    if (file && typeof file.originalname === 'string') {
+      file.originalname = fixDoubleEncodedCyrillic(file.originalname);
+    }
+  }
+}
+
+function normalizePersonName(name: string): string {
+  if (!name) return name;
+  name = name.replace(/\s*\([^\)]*\)\s*/g, ' ').trim();
+  const normalized = name.replace(/\s+/g, ' ').trim().replace(/^[\s\-_]+|[\s\-_]+$/g, '');
+  return normalized.split(' ').map(w => {
+    if (!w || /^\d+$/.test(w)) return w;
+    if (w.includes('-')) {
+      return w.split('-').map(p => /^\d+$/.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join('-');
+    }
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }).join(' ');
+}
+
+function normalizePositionName(pos: string): string {
+  if (!pos) return pos;
+  pos = pos.replace(/\s*\([^\)]*\)\s*/g, ' ').trim();
+  const words = pos.replace(/\s+/g, ' ').trim().split(' ').filter(w => w);
+  if (words.length === 0) return pos;
+  return words.map((w, i) => {
+    if (!w || /^\d+$/.test(w)) return w;
+    return i === 0 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase();
+  }).join(' ');
+}
 
 // ── STATEFUL IN-MEMORY DATABASES ──
 // NOTE: cameras и persons используются как кэш из Prisma (синхронизируются при старте и мутациях).
@@ -956,24 +1003,29 @@ app.post(["/api/persons", "/api/persons/"], upload.any(), async (req, res) => {
     if (req.file) files.push(req.file);
     if (req.files && Array.isArray(req.files)) files = files.concat(req.files as Express.Multer.File[]);
 
-    let name = req.body.name || "Новый посетитель";
-    let position = req.body.position || null;
+    // Фикс кракозябр: браузер передаёт originalname в latin1, не UTF-8
+    fixFilesEncoding(files);
+    if (req.body && typeof req.body === 'object') {
+      for (const key of Object.keys(req.body)) {
+        if (typeof req.body[key] === 'string') {
+          req.body[key] = fixDoubleEncodedCyrillic(req.body[key]);
+        }
+      }
+    }
+
+    let name = normalizePersonName(req.body.name || "Новый посетитель");
+    let position = req.body.position ? normalizePositionName(req.body.position) : null;
 
     if (files.length > 0 && (!req.body.name || req.body.name === "Новый посетитель" || req.body.name === "Новый человек")) {
       const originalName = files[0].originalname;
       const ext = path.extname(originalName);
-      const baseName = path.basename(originalName, ext).trim();
-      const normalized = baseName.replace(/_/g, ' ').replace(/\s+/g, ' ');
-      const words = normalized.split(' ');
-
-      if (words.length >= 4) {
-        name = words.slice(0, 3).join(' ');
-        position = words.slice(3).join(' ');
-      } else if (words.length === 3) {
-        name = words.slice(0, 2).join(' ');
-        position = words[2];
+      const baseName = path.basename(originalName, ext).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+      const dashMatch = baseName.match(/^(.+?)\s+-\s+(.+)$/);
+      if (dashMatch) {
+        name = normalizePersonName(dashMatch[1].trim());
+        position = normalizePositionName(dashMatch[2].trim());
       } else {
-        name = normalized;
+        name = normalizePersonName(baseName);
       }
     }
 
@@ -1108,6 +1160,16 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
     files = files.concat(req.files as Express.Multer.File[]);
   }
 
+  // Фикс кракозябр: браузер передаёт originalname в latin1, не UTF-8
+  fixFilesEncoding(files);
+  if (req.body && typeof req.body === 'object') {
+    for (const key of Object.keys(req.body)) {
+      if (typeof req.body[key] === 'string') {
+        req.body[key] = fixDoubleEncodedCyrillic(req.body[key]);
+      }
+    }
+  }
+
   const category = (req.body.category || 'CLIENT').toUpperCase();
   const jobId = `job_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
@@ -1130,30 +1192,24 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
       try {
         const originalName = f.originalname;
         const ext = path.extname(originalName);
-        const baseName = path.basename(originalName, ext);
+        const baseName = path.basename(originalName, ext).replace(/_/g, ' ').trim();
 
-        let rawName = baseName;
-        let rawPosition: string | null = null;
-        if (baseName.includes('-')) {
-          const parts = baseName.split('-');
-          rawName = parts[0].trim();
-          rawPosition = parts.slice(1).join('-').trim();
-        }
-
-        const formattedName = rawName.replace(/_/g, ' ').trim();
-        let name = formattedName || "Новый посетитель";
-        if (name === name.toUpperCase() || name === name.toLowerCase()) {
-          name = name.split(/\s+/).map(w => w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : '').join(' ');
-        }
-        const cleanName = name.replace(/\s+\d+$/, '').replace(/\s*\(\d+\)$/, '').trim();
-
+        let name: string;
         let position: string | null = null;
-        if (rawPosition) {
-          position = rawPosition.replace(/_/g, ' ').trim();
-          if (position === position.toUpperCase() || position === position.toLowerCase()) {
-            position = position.split(/\s+/).map(w => w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : '').join(' ');
-          }
+
+        const dashMatch = baseName.match(/^(.+?)\s+-\s+(.+)$/);
+        if (dashMatch) {
+          name = normalizePersonName(dashMatch[1].trim());
+          position = normalizePositionName(dashMatch[2].trim());
+        } else if (baseName.includes('-')) {
+          const parts = baseName.split('-');
+          name = normalizePersonName(parts[0].trim());
+          position = normalizePositionName(parts.slice(1).join('-').trim()) || null;
+        } else {
+          name = normalizePersonName(baseName);
         }
+
+        const cleanName = name || "Новый посетитель";
 
         const photo_path = `photos/${f.filename}`;
         const fullPath = path.join(publicDir, photo_path);
@@ -1515,6 +1571,13 @@ async function enrollPhotoWithGate(
   const ext = await extractEmbedding(fullPath, { strict: true });
 
   if (!ext.passed || !ext.descriptor) {
+    const extRelaxed = await extractEmbedding(fullPath, { strict: false });
+    if (extRelaxed.passed && extRelaxed.descriptor) {
+      logInfo(`Эмбеддинг создан в non-strict режиме для ${path.basename(photo_path)} (строгое ворота провалено: ${ext.issues.join("; ") || ext.error})`);
+      const reg = await registerPersonFromDescriptor(personId, personName, category, photo_path, extRelaxed.descriptor);
+      return { hasEmbedding: reg.hasEmbedding, error: reg.error };
+    }
+
     const q = ext.quality;
     await recordFailedEmbedding({
       photo_path,
@@ -3423,6 +3486,13 @@ app.post(["/api/persons/reindex_all", "/api/persons/reindex_all/"], async (req, 
         continue;
       }
       try {
+        // Сбрасываем has_embedding ДО удаления дескрипторов — теперь UI честно
+        // показывает 0 пока переиндексация не завершилась для этой персоны.
+        await prisma.personPhoto.updateMany({
+          where: { person_id: person.id },
+          data: { has_embedding: false },
+        });
+
         // Удаляем старые дескрипторы
         await prisma.faceDescriptor.deleteMany({ where: { person_id: person.id } });
         await unregisterFacePerson(person.id);
@@ -3431,10 +3501,22 @@ app.post(["/api/persons/reindex_all", "/api/persons/reindex_all/"], async (req, 
         for (const photo of photos) {
           const fullPath = path.join(publicDir, photo.photo_path);
           if (!fs.existsSync(fullPath)) continue;
-          const result = await registerFacePerson(
-            person.id, person.name, person.category, photo.photo_path, fullPath
-          );
-          if (result.hasEmbedding) registered++;
+          try {
+            const result = await registerFacePerson(
+              person.id, person.name, person.category, photo.photo_path, fullPath
+            );
+            if (result.hasEmbedding) {
+              registered++;
+              // Обновляем статус конкретной фотографии
+              await prisma.personPhoto.updateMany({
+                where: { person_id: person.id, photo_path: photo.photo_path },
+                data: { has_embedding: true },
+              });
+            }
+          } catch (photoErr: any) {
+            // Одно битое фото не останавливает всю переиндексацию
+            logWarn(`reindex_all: фото "${photo.photo_path}" для "${person.name}" пропущено: ${photoErr?.message}`);
+          }
         }
 
         await prisma.person.update({
@@ -3452,6 +3534,81 @@ app.post(["/api/persons/reindex_all", "/api/persons/reindex_all/"], async (req, 
     res.json({ success, failed, no_photo });
   } catch (err) {
     logError(err as Error, { path: "/api/persons/reindex_all" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+// Переиндексация одной персоны — не нужно запускать reindex_all для всей базы
+app.post(["/api/persons/:id/reindex", "/api/persons/:id/reindex/"], async (req, res) => {
+  try {
+    const personId = parseInt(req.params.id);
+    const person = await prisma.person.findUnique({
+      where: { id: personId },
+      include: { photos: true },
+    });
+    if (!person) return res.status(404).json({ detail: "Person not found" });
+
+    const photos = person.photos.filter((p: any) => p.photo_path);
+    if (photos.length === 0) {
+      return res.json({ ok: true, registered: 0, failed: 0, message: "Нет фотографий для переиндексации" });
+    }
+
+    // Сбрасываем статусы ДО начала — UI видит честное состояние
+    await prisma.personPhoto.updateMany({
+      where: { person_id: personId },
+      data: { has_embedding: false },
+    });
+    await prisma.faceDescriptor.deleteMany({ where: { person_id: personId } });
+    await unregisterFacePerson(personId);
+
+    let registered = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    for (const photo of photos) {
+      const fullPath = path.join(publicDir, photo.photo_path);
+      if (!fs.existsSync(fullPath)) {
+        failed++;
+        errors.push(`${photo.photo_path}: файл не найден`);
+        continue;
+      }
+      try {
+        const result = await registerFacePerson(
+          person.id, person.name, person.category, photo.photo_path, fullPath
+        );
+        if (result.hasEmbedding) {
+          registered++;
+          await prisma.personPhoto.updateMany({
+            where: { person_id: personId, photo_path: photo.photo_path },
+            data: { has_embedding: true },
+          });
+        } else {
+          failed++;
+          if (result.error) errors.push(`${path.basename(photo.photo_path)}: ${result.error}`);
+        }
+      } catch (photoErr: any) {
+        failed++;
+        errors.push(`${path.basename(photo.photo_path)}: ${photoErr?.message}`);
+        logWarn(`reindex person ${personId}: фото "${photo.photo_path}" пропущено: ${photoErr?.message}`);
+      }
+    }
+
+    await prisma.person.update({
+      where: { id: personId },
+      data: { embedding_count: registered },
+    });
+
+    // Sync in-memory cache
+    const updated = await prisma.person.findUnique({ where: { id: personId }, include: { photos: true } });
+    if (updated) {
+      const idx = persons.findIndex((p: any) => p.id === personId);
+      if (idx >= 0) persons[idx] = { ...updated };
+    }
+
+    logInfo(`Reindex person ${personId} (${person.name}): ${registered} OK, ${failed} failed`);
+    res.json({ ok: true, registered, failed, errors, person_id: personId });
+  } catch (err) {
+    logError(err as Error, { path: "/api/persons/:id/reindex" });
     res.status(500).json({ detail: "Internal server error" });
   }
 });
