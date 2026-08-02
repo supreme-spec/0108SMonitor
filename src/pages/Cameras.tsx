@@ -881,7 +881,27 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб FPS</label>
                 <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs rounded-lg" placeholder="—" readOnly />
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной битрейт</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб битрейт</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной GOP</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб GOP</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
               </div>
             </div>
             <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при добавлении камеры</div>

@@ -170,9 +170,27 @@ def _spin(lo, hi, val, step=1):
     s.setRange(lo, hi)
     s.setValue(val)
     s.setSingleStep(step)
-    s.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
     s.setAlignment(_AL)
     return s
+
+def _int_edit(val, lo=0, hi=999999):
+    e = QtWidgets.QLineEdit(str(val))
+    e.setAlignment(_AL)
+    e.setStyleSheet('background:transparent;border:none;color:%s;font-size:13px;'
+                    'selection-background-color:%s;' % (C_TEXT, C_ACCENT_D))
+    v = QtGui.QIntValidator(lo, hi, e)
+    e.setValidator(v)
+    e.installEventFilter(IntFieldFocusFilter(e))
+    return e
+
+class IntFieldFocusFilter(QtCore.QObject):
+    def __init__(self, w):
+        super().__init__(w)
+        self._w = w
+    def eventFilter(self, o, e):
+        if o is self._w and e.type() == _FE_IN:
+            self._w.selectAll()
+        return False
 
 
 # ----------------------------------------------------------------------------
@@ -202,9 +220,9 @@ class StreamPanel(QtWidgets.QFrame):
         v.addLayout(head)
         self.f_codec = Field(_combo(CODECS))
         self.f_res   = Field(_combo(RES, editable=True))
-        self.f_fps   = Field(_spin(1, 60, 25))
-        self.f_br    = Field(_spin(64, 32768, 4096, 128))
-        self.f_gop   = Field(_spin(1, 300, 50))
+        self.f_fps   = Field(_int_edit(25, 1, 60))
+        self.f_br    = Field(_int_edit(4096, 64, 32768))
+        self.f_gop   = Field(_int_edit(50, 1, 300))
         for lbl, fld, suf in (('Codec', self.f_codec, ''),
                               ('Разрешение', self.f_res, ''),
                               ('FPS', self.f_fps, 'кадр/с'),
@@ -228,16 +246,16 @@ class StreamPanel(QtWidgets.QFrame):
     def values(self):
         return dict(codec=self.f_codec.ctrl.currentText(),
                     res=self.f_res.ctrl.currentText(),
-                    fps=self.f_fps.ctrl.value(),
-                    br=self.f_br.ctrl.value(),
-                    gop=self.f_gop.ctrl.value())
+                    fps=int(self.f_fps.ctrl.text() or 0),
+                    br=int(self.f_br.ctrl.text() or 0),
+                    gop=int(self.f_gop.ctrl.text() or 0))
 
     def apply(self, d, src):
         self.f_codec.ctrl.setCurrentText(d['codec'])
         self.f_res.ctrl.setCurrentText(d['res'])
-        self.f_fps.ctrl.setValue(d['fps'])
-        self.f_br.ctrl.setValue(d['br'])
-        self.f_gop.ctrl.setValue(d['gop'])
+        self.f_fps.ctrl.setText(str(d['fps']))
+        self.f_br.ctrl.setText(str(d['br']))
+        self.f_gop.ctrl.setText(str(d['gop']))
         for f in self.fields:
             f.set_source(src)
             f.flash()
