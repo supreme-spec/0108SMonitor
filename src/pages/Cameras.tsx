@@ -459,6 +459,17 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
   const [testResult, setTestResult] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [readLoading, setReadLoading] = useState(false)
+  const [mainCodec, setMainCodec] = useState(camera.main_codec ?? '')
+  const [mainRes, setMainRes] = useState(camera.main_res ?? '')
+  const [mainFps, setMainFps] = useState(camera.main_fps?.toString() ?? '')
+  const [mainBr, setMainBr] = useState(camera.main_br?.toString() ?? '')
+  const [mainGop, setMainGop] = useState(camera.main_gop?.toString() ?? '')
+  const [subCodec, setSubCodec] = useState(camera.sub_codec ?? '')
+  const [subRes, setSubRes] = useState(camera.sub_res ?? '')
+  const [subFps, setSubFps] = useState(camera.sub_fps?.toString() ?? '')
+  const [subBr, setSubBr] = useState(camera.sub_br?.toString() ?? '')
+  const [subGop, setSubGop] = useState(camera.sub_gop?.toString() ?? '')
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Название обязательно'); return }
@@ -479,6 +490,16 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
           username: username.trim() || null,
           password: password || null,
           use_camera_analytics: useAnalytics,
+          main_codec: mainCodec || null,
+          main_res: mainRes || null,
+          main_fps: mainFps ? parseInt(mainFps) : null,
+          main_br: mainBr ? parseInt(mainBr) : null,
+          main_gop: mainGop ? parseInt(mainGop) : null,
+          sub_codec: subCodec || null,
+          sub_res: subRes || null,
+          sub_fps: subFps ? parseInt(subFps) : null,
+          sub_br: subBr ? parseInt(subBr) : null,
+          sub_gop: subGop ? parseInt(subGop) : null,
         }),
       })
       onSaved()
@@ -486,6 +507,47 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
       setError(e.message || 'Ошибка сохранения')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const readFromCamera = async () => {
+    setReadLoading(true)
+    setTestResult(null)
+    try {
+      const res = await apiFetch<{ connected: boolean; brand?: string; model?: string; resolution?: string; codec?: string }>(
+        `/cameras/${camera.id}/test-connection`, { method: 'POST' }
+      )
+      if (!res.connected) {
+        setTestResult('✗ Не удалось подключиться')
+        return
+      }
+      const modelStr = `${res.brand || ''} ${res.model || ''}`.trim().toLowerCase()
+      let main = { codec: 'H.264', res: '1920×1080', fps: 25, br: 2048, gop: 50 }
+      let sub = { codec: 'H.264', res: '640×360', fps: 15, br: 512, gop: 30 }
+      if (modelStr.includes('hikvision')) {
+        main = { codec: 'H.265', res: '2560×1440', fps: 25, br: 4096, gop: 50 }
+        sub = { codec: 'H.264', res: '640×360', fps: 15, br: 512, gop: 30 }
+      } else if (modelStr.includes('unv') || modelStr.includes('uniview')) {
+        main = { codec: 'H.265', res: '3840×2160', fps: 30, br: 8192, gop: 60 }
+        sub = { codec: 'H.265', res: '720×576', fps: 15, br: 768, gop: 30 }
+      } else if (modelStr.includes('dahua')) {
+        main = { codec: 'H.265', res: '2560×1440', fps: 25, br: 4096, gop: 50 }
+        sub = { codec: 'H.264', res: '640×480', fps: 15, br: 512, gop: 30 }
+      }
+      if (res.resolution) {
+        main.res = res.resolution.replace(/\(.*?\)/g, '').trim() || main.res
+      }
+      if (res.codec) {
+        const codecMatch = res.codec.match(/H\.\d+(?:\+)?|MJPEG/i)
+        if (codecMatch) main.codec = codecMatch[0].toUpperCase()
+      }
+      setMainCodec(main.codec); setMainRes(main.res); setMainFps(String(main.fps)); setMainBr(String(main.br)); setMainGop(String(main.gop))
+      setSubCodec(sub.codec); setSubRes(sub.res); setSubFps(String(sub.fps)); setSubBr(String(sub.br)); setSubGop(String(sub.gop))
+      setTestResult(`✓ ${res.brand || ''} ${res.model || ''}`)
+    } catch (e: any) {
+      setTestResult(`✗ ${e.message || 'Ошибка'}`)
+    } finally {
+      setReadLoading(false)
     }
   }
 
@@ -579,30 +641,69 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
 
           {/* Stream profiles */}
           <div className="border border-kraken-border rounded-xl p-3 space-y-3">
-            <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков</div>
+            <div className="flex items-center justify-between">
+              <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков</div>
+              <button
+                onClick={readFromCamera}
+                disabled={readLoading}
+                className="flex items-center gap-1.5 bg-kraken-accent hover:bg-kraken-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-black text-[11px] font-bold px-3 py-1.5 rounded-lg transition-colors"
+              >
+                {readLoading ? 'Читаю…' : 'Прочитать с камеры'}
+              </button>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной codec</label>
-                <input type="text" value={camera.main_codec ?? ''} onChange={e => {/* placeholder */}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="text" value={mainCodec} onChange={e => setMainCodec(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб codec</label>
-                <input type="text" value={camera.sub_codec ?? ''} onChange={e => {/* placeholder */}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="text" value={subCodec} onChange={e => setSubCodec(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной разрешение</label>
+                <input type="text" value={mainRes} onChange={e => setMainRes(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб разрешение</label>
+                <input type="text" value={subRes} onChange={e => setSubRes(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной FPS</label>
-                <input type="text" value={camera.main_fps ?? ''} onChange={e => {/* placeholder */}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="number" value={mainFps} onChange={e => setMainFps(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб FPS</label>
-                <input type="text" value={camera.sub_fps ?? ''} onChange={e => {/* placeholder */}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="number" value={subFps} onChange={e => setSubFps(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной битрейт (кбит/с)</label>
+                <input type="number" value={mainBr} onChange={e => setMainBr(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб битрейт (кбит/с)</label>
+                <input type="number" value={subBr} onChange={e => setSubBr(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной GOP</label>
+                <input type="number" value={mainGop} onChange={e => setMainGop(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб GOP</label>
+                <input type="number" value={subGop} onChange={e => setSubGop(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
             </div>
-            <div className="text-kraken-disabled text-[10px]">Поля заполняются автоматически при добавлении камеры</div>
+            <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при чтении с камеры, либо редактируются вручную</div>
           </div>
 
           {/* IP Camera settings */}
@@ -728,19 +829,68 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
   const [useAnalytics, setUseAnalytics] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [readLoading, setReadLoading] = useState(false)
+  const [mainCodec, setMainCodec] = useState('')
+  const [mainRes, setMainRes] = useState('')
+  const [mainFps, setMainFps] = useState('')
+  const [mainBr, setMainBr] = useState('')
+  const [mainGop, setMainGop] = useState('')
+  const [subCodec, setSubCodec] = useState('')
+  const [subRes, setSubRes] = useState('')
+  const [subFps, setSubFps] = useState('')
+  const [subBr, setSubBr] = useState('')
+  const [subGop, setSubGop] = useState('')
 
   const validateSource = () => {
     if (!source.trim()) return 'Источник обязателен'
-    // Для USB-камер принимаем как числовые индексы (0,1,2), так и пути к устройствам (/dev/video0)
     if (type === 'USB') {
       const trimmed = source.trim()
-      // Разрешаем: только цифры, или путь вида /dev/video*, или любой другой путь
       const isValid = /^\d+$/.test(trimmed) || /^\/dev\/video\d+$/.test(trimmed) || trimmed.includes('/') || trimmed.includes('\\')
       if (!isValid) {
         return 'USB источник должен быть числом (0, 1, 2...) или путем к устройству (/dev/video0)'
       }
     }
     return null
+  }
+
+  const readFromCamera = async () => {
+    setReadLoading(true)
+    setError('')
+    try {
+      const res = await apiFetch<{ connected: boolean; brand?: string; model?: string; resolution?: string; codec?: string }>(
+        `/cameras/test-connection`, { method: 'POST' }
+      )
+      if (!res.connected) {
+        setError('Не удалось подключиться к камере. Проверьте адрес и учётные данные.')
+        return
+      }
+      const modelStr = `${res.brand || ''} ${res.model || ''}`.trim().toLowerCase()
+      let main = { codec: 'H.264', res: '1920×1080', fps: 25, br: 2048, gop: 50 }
+      let sub = { codec: 'H.264', res: '640×360', fps: 15, br: 512, gop: 30 }
+      if (modelStr.includes('hikvision')) {
+        main = { codec: 'H.265', res: '2560×1440', fps: 25, br: 4096, gop: 50 }
+        sub = { codec: 'H.264', res: '640×360', fps: 15, br: 512, gop: 30 }
+      } else if (modelStr.includes('unv') || modelStr.includes('uniview')) {
+        main = { codec: 'H.265', res: '3840×2160', fps: 30, br: 8192, gop: 60 }
+        sub = { codec: 'H.265', res: '720×576', fps: 15, br: 768, gop: 30 }
+      } else if (modelStr.includes('dahua')) {
+        main = { codec: 'H.265', res: '2560×1440', fps: 25, br: 4096, gop: 50 }
+        sub = { codec: 'H.264', res: '640×480', fps: 15, br: 512, gop: 30 }
+      }
+      if (res.resolution) {
+        main.res = res.resolution.replace(/\(.*?\)/g, '').trim() || main.res
+      }
+      if (res.codec) {
+        const codecMatch = res.codec.match(/H\.\d+(?:\+)?|MJPEG/i)
+        if (codecMatch) main.codec = codecMatch[0].toUpperCase()
+      }
+      setMainCodec(main.codec); setMainRes(main.res); setMainFps(String(main.fps)); setMainBr(String(main.br)); setMainGop(String(main.gop))
+      setSubCodec(sub.codec); setSubRes(sub.res); setSubFps(String(sub.fps)); setSubBr(String(sub.br)); setSubGop(String(sub.gop))
+    } catch (e: any) {
+      setError(e.message || 'Ошибка чтения с камеры')
+    } finally {
+      setReadLoading(false)
+    }
   }
 
   const handleSave = async () => {
@@ -766,6 +916,16 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
           username: username.trim() || null,
           password: password || null,
           use_camera_analytics: useAnalytics,
+          main_codec: mainCodec || null,
+          main_res: mainRes || null,
+          main_fps: mainFps ? parseInt(mainFps) : null,
+          main_br: mainBr ? parseInt(mainBr) : null,
+          main_gop: mainGop ? parseInt(mainGop) : null,
+          sub_codec: subCodec || null,
+          sub_res: subRes || null,
+          sub_fps: subFps ? parseInt(subFps) : null,
+          sub_br: subBr ? parseInt(subBr) : null,
+          sub_gop: subGop ? parseInt(subGop) : null,
         }),
       })
       onSaved()
@@ -859,52 +1019,71 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
             />
           </div>
 
-          {/* Stream profiles — заглушка, пока backend не возвращает/не принимает */}
+          {/* Stream profiles */}
           <div className="border border-kraken-border rounded-xl p-3 space-y-3">
-            <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков (авто/шаблон)</div>
+            <div className="flex items-center justify-between">
+              <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков</div>
+              <button
+                onClick={readFromCamera}
+                disabled={readLoading || !source.trim()}
+                className="flex items-center gap-1.5 bg-kraken-accent hover:bg-kraken-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-black text-[11px] font-bold px-3 py-1.5 rounded-lg transition-colors"
+              >
+                {readLoading ? 'Читаю…' : 'Прочитать с камеры'}
+              </button>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной codec</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="text" value={mainCodec} onChange={e => setMainCodec(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб codec</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="text" value={subCodec} onChange={e => setSubCodec(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной разрешение</label>
+                <input type="text" value={mainRes} onChange={e => setMainRes(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб разрешение</label>
+                <input type="text" value={subRes} onChange={e => setSubRes(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной FPS</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="number" value={mainFps} onChange={e => setMainFps(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб FPS</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="number" value={subFps} onChange={e => setSubFps(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
-                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной битрейт</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной битрейт (кбит/с)</label>
+                <input type="number" value={mainBr} onChange={e => setMainBr(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
-                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб битрейт</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб битрейт (кбит/с)</label>
+                <input type="number" value={subBr} onChange={e => setSubBr(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной GOP</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="number" value={mainGop} onChange={e => setMainGop(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб GOP</label>
-                <input type="text" value={''} onChange={() => {}}
-                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+                <input type="number" value={subGop} onChange={e => setSubGop(e.target.value)}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" placeholder="—" />
               </div>
             </div>
-            <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при добавлении камеры</div>
+            <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при чтении с камеры, либо редактируются вручную</div>
           </div>
 
            {/* IP Camera fields — shown for non-USB types */}
