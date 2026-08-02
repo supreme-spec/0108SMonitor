@@ -907,7 +907,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
             <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при добавлении камеры</div>
           </div>
 
-          {/* IP Camera fields — shown for non-USB types */}
+           {/* IP Camera fields — shown for non-USB types */}
           {type !== 'USB' && (
             <div className="border border-kraken-border rounded-xl p-3 space-y-3">
               <div className="text-kraken-muted text-xs uppercase tracking-widest">IP камера</div>
@@ -950,32 +950,52 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
             </div>
           )}
 
-          <div className="flex gap-4 p-3 bg-kraken-base rounded-xl border border-kraken-border">
-            <label className="flex-1 flex items-center gap-2 cursor-pointer group">
-              <input
-                type="checkbox"
-                checked={smartRec}
-                onChange={e => setSmartRec(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent"
-              />
-              <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-accent transition-colors">Умная съёмка</span>
-                <span className="text-[10px] text-kraken-disabled">Запись 15с при обнаружении</span>
+          {/* Stream profiles — заглушка, пока backend не возвращает/не принимает */}
+          <div className="border border-kraken-border rounded-xl p-3 space-y-3">
+            <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков (авто/шаблон)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной codec</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
               </div>
-            </label>
-            <div className="w-px bg-kraken-border h-8 self-center" />
-            <label className="flex-1 flex items-center gap-2 cursor-pointer group">
-              <input
-                type="checkbox"
-                checked={chronicle}
-                onChange={e => setChronicle(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent"
-              />
-              <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-accent transition-colors">Фотохроника</span>
-                <span className="text-[10px] text-kraken-disabled">Снимок посетителя в день</span>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб codec</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
               </div>
-            </label>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной FPS</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб FPS</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной битрейт</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб битрейт</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной GOP</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб GOP</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+            </div>
+            <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при добавлении камеры</div>
           </div>
 
           {error && <div className="text-kraken-red text-sm bg-kraken-red/10 px-3 py-2 rounded-lg">{error}</div>}
