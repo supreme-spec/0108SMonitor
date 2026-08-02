@@ -18,6 +18,29 @@ _Qt = getattr(Qt, 'AlignmentFlag', Qt)
 _AL = getattr(_Qt, 'AlignLeft', 1)
 _AC = getattr(_Qt, 'AlignCenter', 132)
 
+# --- авто-подстройка под монитор ---
+def _detect_scale():
+    try:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        screen = app.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            w, h = geo.width(), geo.height()
+            if w >= 2560 or h >= 1440:
+                return 'large', 1.15
+            elif w >= 1920 or h >= 1080:
+                return 'medium', 1.0
+            else:
+                return 'small', 0.9
+    except Exception:
+        pass
+    return 'medium', 1.0
+
+_SCALE_NAME, _SCALE_FACTOR = _detect_scale()
+_FONT_BASE = { 'small': 11, 'medium': 12, 'large': 13 }[_SCALE_NAME]
+_FIELD_H = { 'small': 36, 'medium': 40, 'large': 44 }[_SCALE_NAME]
+_DIALOG_W = { 'small': 780, 'medium': 820, 'large': 900 }[_SCALE_NAME]
+
 # --- палитра Kraken ---
 C_BG, C_PANEL, C_FIELD = '#0c1117', '#141c25', '#0f161e'
 C_FIELD_H, C_BORDER, C_BORDER_H = '#16202b', '#283441', '#3a4a5a'
@@ -197,6 +220,12 @@ class MainScreen(QtWidgets.QWidget):
         super().__init__(parent)
         self.role = role
         self._build()
+        self._apply_scale()
+
+    def _apply_scale(self):
+        f = QtGui.QFont('Segoe UI', _FONT_BASE)
+        f.setStyleStrategy(QtGui.QFont.PreferAntialias)
+        QtWidgets.QApplication.setFont(f)
 
     def _build(self):
         outer = QtWidgets.QVBoxLayout(self)
@@ -272,7 +301,7 @@ if __name__ == '__main__':
     w = QtWidgets.QMainWindow()
     w.setWindowTitle('Kraken · UI_v2 · Главный экран')
     w.setStyleSheet('QMainWindow{background:%s;}' % C_BG)
-    w.resize(1100, 720)
+    w.resize(int(1100 * _SCALE_FACTOR), int(720 * _SCALE_FACTOR))
     stage = Stage(role='expert')
     w.setCentralWidget(stage)
     w.show()

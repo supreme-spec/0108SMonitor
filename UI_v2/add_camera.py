@@ -30,6 +30,29 @@ _FE_IN, _FE_OUT = _ev('FocusIn', 'Type.FocusIn'), _ev('FocusOut', 'Type.FocusOut
 _BOLD = getattr(QtGui.QFont, 'Bold', getattr(getattr(QtGui.QFont, 'Weight', object()), 'Bold', 75))
 _MED  = getattr(QtGui.QFont, 'Medium', getattr(getattr(QtGui.QFont, 'Weight', object()), 'Medium', 57))
 
+# --- авто-подстройка под монитор ---
+def _detect_scale():
+    try:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        screen = app.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            w, h = geo.width(), geo.height()
+            if w >= 2560 or h >= 1440:
+                return 'large', 1.15
+            elif w >= 1920 or h >= 1080:
+                return 'medium', 1.0
+            else:
+                return 'small', 0.9
+    except Exception:
+        pass
+    return 'medium', 1.0
+
+_SCALE_NAME, _SCALE_FACTOR = _detect_scale()
+_FONT_BASE = { 'small': 11, 'medium': 12, 'large': 13 }[_SCALE_NAME]
+_FIELD_H = { 'small': 36, 'medium': 40, 'large': 44 }[_SCALE_NAME]
+_DIALOG_W = { 'small': 780, 'medium': 820, 'large': 900 }[_SCALE_NAME]
+
 # --- палитра Kraken (единый костюм с хабом) ---
 C_BG, C_PANEL, C_FIELD = '#0c1117', '#141c25', '#0f161e'
 C_FIELD_H, C_BORDER, C_BORDER_H = '#16202b', '#283441', '#3a4a5a'
@@ -410,7 +433,7 @@ class CameraDialog(QtWidgets.QWidget):
         v.addLayout(f)
 
         outer.addWidget(card)
-        self.setFixedWidth(820)
+        self.setFixedWidth(_DIALOG_W)
 
     def _check(self, title, sub, on):
         w = QtWidgets.QFrame()
@@ -567,10 +590,11 @@ if __name__ == '__main__':
     w = QtWidgets.QMainWindow()
     w.setWindowTitle('Kraken · UI_v2 · Добавить камеру')
     w.setStyleSheet('QMainWindow{background:%s;}' % C_BG)
-    w.resize(980, 760)
+    w.resize(int(980 * _SCALE_FACTOR), int(760 * _SCALE_FACTOR))
     stage = Stage(role='expert')
     w.setCentralWidget(stage)
     w.show()
+    QtWidgets.QApplication.setFont(QtGui.QFont('Segoe UI', _FONT_BASE))
     if do_screenshot:
         import os
         def _save():
