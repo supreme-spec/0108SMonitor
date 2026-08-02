@@ -154,7 +154,7 @@ const upload = multer({
   storage,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10 МБ
-    files: 50,
+    files: 500,                  // увеличено для массового импорта
   },
   fileFilter: (req, file, cb) => {
     if (ALLOWED_IMAGE_MIME.has(file.mimetype)) {
