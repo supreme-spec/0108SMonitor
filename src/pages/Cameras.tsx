@@ -153,14 +153,14 @@ export default function Cameras() {
             value={onvifNetwork}
             onChange={e => setOnvifNetwork(e.target.value)}
             placeholder="192.168.1"
-            className="w-28 bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
+            className="w-28 bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent"
             title="Подсеть для сканирования (например 192.168.0)"
           />
         </div>
 
         <button
           onClick={() => { setPrefillSource(''); setPrefillType('USB'); setPrefillName(''); setShowAdd(true) }}
-          className="btn-primary flex items-center gap-2 ml-auto"
+          className="flex items-center gap-2 ml-auto bg-kraken-accent hover:bg-kraken-accent-hover text-black font-semibold px-4 py-2 rounded-lg transition-colors"
         >
           <Plus size={16} />
           Добавить камеру
@@ -169,19 +169,21 @@ export default function Cameras() {
 
       {/* ── USB scan results ── */}
       {usbFound.length > 0 && (
-        <div className="panel p-3">
-          <div className="text-kraken-muted text-xs uppercase tracking-widest mb-2">Найдены USB камеры</div>
-          <div className="flex flex-wrap gap-2">
+        <div className="ui2-tile p-4">
+          <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest mb-3">Найдены USB камеры</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {usbFound.map(c => (
               <button
                 key={c.source}
                 onClick={() => openAddWithPreset(c.source, 'USB', `USB Camera ${c.index}`)}
-                className="flex items-center gap-2 bg-kraken-hover hover:bg-kraken-purple/20 border border-kraken-border hover:border-kraken-purple px-3 py-1.5 rounded-lg text-sm transition-colors"
+                className="flex items-center gap-3 bg-kraken-field hover:bg-kraken-field-hover border border-kraken-border hover:border-kraken-accent rounded-xl px-3 py-2.5 text-sm transition-colors text-left"
               >
-                <span className="text-kraken-green">●</span>
-                <span className="text-kraken-text">{c.name}</span>
-                <span className="text-kraken-muted text-xs">index {c.source}</span>
-                <Plus size={12} className="text-kraken-purple" />
+                <span className="text-kraken-green text-xs">●</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-kraken-text text-xs font-medium truncate">{c.name}</div>
+                  <div className="text-kraken-disabled text-[10px] font-mono">index {c.source}</div>
+                </div>
+                <Plus size={12} className="text-kraken-accent shrink-0" />
               </button>
             ))}
           </div>
@@ -190,28 +192,28 @@ export default function Cameras() {
 
       {/* ── ONVIF/IP scan results ── */}
       {onvifFound.length > 0 && (
-        <div className="panel p-3">
-          <div className="text-kraken-muted text-xs uppercase tracking-widest mb-2">
+        <div className="ui2-tile p-4">
+          <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest mb-3">
             Найдены IP камеры ({onvifFound.length})
           </div>
           <div className="flex flex-col gap-2">
             {onvifFound.map((c, i) => (
-              <div key={i} className="flex items-center gap-3 bg-kraken-hover rounded-lg px-3 py-2">
-                <div className="flex-1">
+              <div key={i} className="flex items-center gap-3 bg-kraken-field rounded-xl px-3 py-2.5 border border-kraken-border">
+                <div className="flex-1 min-w-0">
                   <div className="text-kraken-text text-sm font-medium">{c.ip}:{c.port}</div>
                   <div className="text-kraken-muted text-xs font-mono">{c.source}</div>
                   {c.common_paths && (
-                    <div className="text-kraken-disabled text-xs mt-0.5">
+                    <div className="text-kraken-disabled text-[10px] mt-0.5">
                       Попробуйте пути: {c.common_paths.slice(0, 2).join(', ')}
                     </div>
                   )}
                 </div>
-                <span className="text-xs bg-kraken-blue/20 text-kraken-blue px-2 py-0.5 rounded">
+                <span className="text-[10px] bg-kraken-blue/15 text-kraken-blue px-2 py-0.5 rounded-md shrink-0">
                   {c.type}
                 </span>
                 <button
                   onClick={() => openAddWithPreset(c.source, 'RTSP', `IP Camera ${c.ip}`)}
-                  className="flex items-center gap-1 bg-kraken-purple hover:bg-kraken-purple-hover text-white text-xs px-2 py-1 rounded-lg transition-colors"
+                  className="flex items-center gap-1 bg-kraken-accent hover:bg-kraken-accent-hover text-black text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors shrink-0"
                 >
                   <Plus size={12} />
                   Добавить
@@ -233,55 +235,40 @@ export default function Cameras() {
           </div>
         )}
         {cameras.map(cam => (
-          <div key={cam.id} className="panel p-4 flex flex-col gap-3">
-            {/* Header: name + status */}
-            <div className="flex items-start justify-between gap-2">
+          <div key={cam.id} className="ui2-tile flex flex-col gap-3">
+            {/* Header: name + status dot */}
+            <div className="ui2-tile-header">
               <div className="flex-1 min-w-0">
-                <div className="text-kraken-text font-semibold truncate">{cam.name}</div>
-                {/* Source path — full text, wraps, monospace */}
-                <div
-                  className="text-kraken-muted text-xs mt-0.5 font-mono break-all leading-relaxed"
-                  title={cam.source}
-                >
+                <div className="text-kraken-text font-semibold text-sm truncate">{cam.name}</div>
+                <div className="text-kraken-muted text-[11px] mt-0.5 font-mono break-all leading-relaxed" title={cam.source}>
                   {cam.source}
                 </div>
               </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                {cam.status === 'online'
-                  ? <Wifi size={14} className="text-kraken-green" />
-                  : cam.status === 'connecting' || cam.status === 'reconnecting'
-                    ? <RefreshCw size={14} className="text-yellow-400 animate-spin" />
-                    : <WifiOff size={14} className="text-kraken-disabled" />
-                }
-                <span className={`text-xs font-bold ${statusColor(cam.status)}`}>
+              <div className="flex items-center gap-1.5">
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${cam.status === 'online' ? 'bg-kraken-green shadow-[0_0_8px_rgba(0,255,148,0.5)]' : cam.status === 'connecting' || cam.status === 'reconnecting' ? 'bg-yellow-400 animate-pulse' : 'bg-kraken-disabled'}`} />
+                <span className={`text-[11px] font-bold ${statusColor(cam.status)}`}>
                   {statusLabel(cam.status)}
                 </span>
               </div>
             </div>
 
             {/* Badges */}
-            <div className="flex items-center gap-2 flex-wrap text-xs text-kraken-muted">
-              <span className="bg-kraken-hover px-2 py-0.5 rounded">{cam.camera_type}</span>
-              {cam.brand && <span className="bg-kraken-blue/10 text-kraken-blue px-2 py-0.5 rounded">{cam.brand}</span>}
-              {cam.model_name && <span className="bg-kraken-hover px-2 py-0.5 rounded text-kraken-text">{cam.model_name}</span>}
-              {cam.zone && <span className="bg-kraken-hover px-2 py-0.5 rounded">{cam.zone}</span>}
+            <div className="flex items-center gap-2 flex-wrap text-[11px] text-kraken-muted">
+              <span className="src-badge src-badge--manual">{cam.camera_type}</span>
+              {cam.brand && <span className="src-badge src-badge--tmpl">{cam.brand}</span>}
+              {cam.model_name && <span className="src-badge src-badge--manual">{cam.model_name}</span>}
+              {cam.zone && <span className="src-badge src-badge--manual">{cam.zone}</span>}
               {cam.status === 'online' && cam.fps != null && (
-                <span className="bg-kraken-hover px-2 py-0.5 rounded text-kraken-green font-mono">
-                  {cam.fps} fps
-                </span>
+                <span className="src-badge src-badge--auto">{cam.fps} fps</span>
               )}
               {cam.status === 'online' && cam.ping_ms != null && (
-                <span className={`px-2 py-0.5 rounded font-mono ${
-                  cam.ping_ms < 50  ? 'bg-kraken-green/10 text-kraken-green' :
-                  cam.ping_ms < 150 ? 'bg-yellow-400/10 text-yellow-400' :
-                                      'bg-kraken-red/10 text-kraken-red'
-                }`}>
+                <span className={`src-badge ${cam.ping_ms < 50 ? 'src-badge--auto' : cam.ping_ms < 150 ? 'src-badge--tmpl' : 'src-badge--manual'}`}>
                   {cam.ping_ms} ms
                 </span>
               )}
               {cam.roi_zones && cam.roi_zones.length > 0 && (
                 <span
-                  className="bg-kraken-purple/20 text-kraken-purple px-2 py-0.5 rounded cursor-pointer hover:bg-kraken-purple/30 transition-colors"
+                  className="src-badge src-badge--tmpl cursor-pointer hover:border-kraken-accent transition-colors"
                   onClick={() => setRoiCamera(cam)}
                   title="Настроить зоны детектирования"
                 >
@@ -290,12 +277,64 @@ export default function Cameras() {
               )}
             </div>
 
+            {/* Stream params */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-kraken-field border border-kraken-border rounded-xl p-2.5">
+                <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-wider mb-2">Основной поток</div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">Codec</span>
+                  <span className="ui2-field-value">{cam.main_codec ?? '—'}</span>
+                  <span className={`src-badge ${cam.main_src === 'auto' ? 'src-badge--auto' : cam.main_src === 'tmpl' ? 'src-badge--tmpl' : 'src-badge--manual'}`}>{cam.main_src === 'auto' ? 'авто' : cam.main_src === 'tmpl' ? 'шаблон' : 'ручной'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">Разрешение</span>
+                  <span className="ui2-field-value">{cam.main_res ?? '—'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">FPS</span>
+                  <span className="ui2-field-value">{cam.main_fps ?? cam.fps ?? '—'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">Битрейт</span>
+                  <span className="ui2-field-value">{cam.main_br ? `${cam.main_br} кбит/с` : '—'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">GOP</span>
+                  <span className="ui2-field-value">{cam.main_gop ?? '—'}</span>
+                </div>
+              </div>
+              <div className="bg-kraken-field border border-kraken-border rounded-xl p-2.5">
+                <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-wider mb-2">Суб-поток</div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">Codec</span>
+                  <span className="ui2-field-value">{cam.sub_codec ?? '—'}</span>
+                  <span className={`src-badge ${cam.sub_src === 'auto' ? 'src-badge--auto' : cam.sub_src === 'tmpl' ? 'src-badge--tmpl' : 'src-badge--manual'}`}>{cam.sub_src === 'auto' ? 'авто' : cam.sub_src === 'tmpl' ? 'шаблон' : 'ручной'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">Разрешение</span>
+                  <span className="ui2-field-value">{cam.sub_res ?? '—'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">FPS</span>
+                  <span className="ui2-field-value">{cam.sub_fps ?? '—'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">Битрейт</span>
+                  <span className="ui2-field-value">{cam.sub_br ? `${cam.sub_br} кбит/с` : '—'}</span>
+                </div>
+                <div className="ui2-field">
+                  <span className="ui2-field-label">GOP</span>
+                  <span className="ui2-field-value">{cam.sub_gop ?? '—'}</span>
+                </div>
+              </div>
+            </div>
+
             {/* Action buttons */}
             <div className="flex gap-2 mt-1">
               {cam.status !== 'online' ? (
                 <button
                   onClick={() => handleStart(cam.id)}
-                  className="flex-1 flex items-center justify-center gap-1.5 bg-kraken-green/10 hover:bg-kraken-green/20 text-kraken-green text-sm py-1.5 rounded-lg transition-colors"
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-kraken-green/10 hover:bg-kraken-green/20 text-kraken-green text-xs py-1.5 rounded-lg transition-colors"
                 >
                   <Play size={13} />
                   Запустить
@@ -304,14 +343,14 @@ export default function Cameras() {
                 <>
                   <button
                     onClick={() => handleStop(cam.id)}
-                    className="flex-1 flex items-center justify-center gap-1.5 bg-kraken-red/10 hover:bg-kraken-red/20 text-kraken-red text-sm py-1.5 rounded-lg transition-colors"
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-kraken-red/10 hover:bg-kraken-red/20 text-kraken-red text-xs py-1.5 rounded-lg transition-colors"
                   >
                     <Square size={13} />
                     Остановить
                   </button>
                   <button
                     onClick={() => handleRecord(cam.id)}
-                    className="flex items-center justify-center gap-1.5 bg-kraken-purple/10 hover:bg-kraken-purple/20 text-kraken-purple text-sm py-1.5 px-3 rounded-lg transition-colors"
+                    className="flex items-center justify-center gap-1.5 bg-kraken-accent/10 hover:bg-kraken-accent/20 text-kraken-accent text-xs py-1.5 px-3 rounded-lg transition-colors"
                     title="Записать 15 секунд (умная съёмка)"
                   >
                     <Video size={13} />
@@ -327,7 +366,7 @@ export default function Cameras() {
               </button>
               <button
                 onClick={() => setRoiCamera(cam)}
-                className="p-1.5 rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-purple transition-colors"
+                className="p-1.5 rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-accent transition-colors"
                 title="Зоны детектирования"
               >
                 <ScanLine size={14} />
@@ -471,7 +510,7 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="panel p-6 w-full max-w-xl mx-4 animate-fade-in max-h-[90vh] overflow-y-auto">
+      <div className="ui2-tile p-6 w-full max-w-xl mx-4 animate-fade-in max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-kraken-text font-bold text-lg">Редактировать камеру</h2>
@@ -490,7 +529,7 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
+              className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent"
             />
           </div>
 
@@ -505,7 +544,7 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
                 onChange={e => setSource(e.target.value)}
                 rows={3}
                 spellCheck={false}
-                className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple font-mono resize-none leading-relaxed"
+                className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent font-mono resize-none leading-relaxed"
                 placeholder="rtsp://admin:password@192.168.1.100:554/stream"
               />
             ) : (
@@ -513,7 +552,7 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
                 type="text"
                 value={source}
                 onChange={e => setSource(e.target.value)}
-                className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple font-mono"
+                className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent font-mono"
                 placeholder="0"
               />
             )}
@@ -534,8 +573,36 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
               value={zone}
               onChange={e => setZone(e.target.value)}
               placeholder="Главный вход, Парковка..."
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
+              className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent"
             />
+          </div>
+
+          {/* Stream profiles */}
+          <div className="border border-kraken-border rounded-xl p-3 space-y-3">
+            <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной codec</label>
+                <input type="text" value={camera.main_codec ?? ''} onChange={e => {/* placeholder */}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб codec</label>
+                <input type="text" value={camera.sub_codec ?? ''} onChange={e => {/* placeholder */}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной FPS</label>
+                <input type="text" value={camera.main_fps ?? ''} onChange={e => {/* placeholder */}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб FPS</label>
+                <input type="text" value={camera.sub_fps ?? ''} onChange={e => {/* placeholder */}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+            </div>
+            <div className="text-kraken-disabled text-[10px]">Поля заполняются автоматически при добавлении камеры</div>
           </div>
 
           {/* IP Camera settings */}
@@ -546,31 +613,31 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">IP адрес</label>
                 <input type="text" value={ipAddress} onChange={e => setIpAddress(e.target.value)}
                   placeholder="192.168.1.100"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono" />
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent font-mono" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Порт</label>
                 <input type="text" value={ipPort} onChange={e => setIpPort(e.target.value)}
                   placeholder="80"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono" />
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent font-mono" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Логин</label>
                 <input type="text" value={username} onChange={e => setUsername(e.target.value)}
                   placeholder="admin"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple" />
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" />
               </div>
               <div>
                 <label className="text-kraken-muted text-[10px] mb-0.5 block">Пароль</label>
                 <input type="password" value={password} onChange={e => setPassword(e.target.value)}
                   placeholder="••••••"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple" />
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" />
               </div>
             </div>
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={useAnalytics} onChange={e => setUseAnalytics(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple" />
+                  className="w-3.5 h-3.5 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent" />
                 <div className="flex flex-col">
                   <span className="text-kraken-text text-[10px] font-semibold">Аналитика камеры</span>
                   <span className="text-[9px] text-kraken-disabled">Использовать AI камеры (Hikvision/UNV)</span>
@@ -596,10 +663,10 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
                 type="checkbox"
                 checked={smartRec}
                 onChange={e => setSmartRec(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple"
+                className="w-4 h-4 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent"
               />
               <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-purple transition-colors">Умная съёмка</span>
+                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-accent transition-colors">Умная съёмка</span>
                 <span className="text-[10px] text-kraken-disabled">Запись 15с при обнаружении</span>
               </div>
             </label>
@@ -609,10 +676,10 @@ function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
                 type="checkbox"
                 checked={chronicle}
                 onChange={e => setChronicle(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple"
+                className="w-4 h-4 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent"
               />
               <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-purple transition-colors">Фотохроника</span>
+                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-accent transition-colors">Фотохроника</span>
                 <span className="text-[10px] text-kraken-disabled">Снимок посетителя в день</span>
               </div>
             </label>
@@ -711,7 +778,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="panel p-6 w-full max-w-md mx-4 animate-fade-in max-h-[90vh] overflow-y-auto">
+      <div className="ui2-tile p-6 w-full max-w-xl mx-4 animate-fade-in max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-kraken-text font-bold text-lg">Добавить камеру</h2>
           <button onClick={onClose} className="text-kraken-muted hover:text-kraken-text">
@@ -727,7 +794,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="Главный вход"
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
+              className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent"
             />
           </div>
 
@@ -736,7 +803,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
             <select
               value={type}
               onChange={e => { setType(e.target.value); setSource('') }}
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
+              className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent"
             >
               <option value="USB">USB (встроенная / USB камера)</option>
               <option value="RTSP">RTSP (IP камера)</option>
@@ -747,7 +814,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
             </select>
           </div>
 
-          <div>
+           <div>
             <label className="text-kraken-muted text-xs mb-1 block">
               {type === 'USB' ? 'Индекс камеры (0, 1, 2...)' : 'RTSP URL'}
             </label>
@@ -755,7 +822,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
               <select
                 value={source}
                 onChange={e => setSource(e.target.value)}
-                className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
+                className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent"
               >
                 <option value="">Выберите камеру</option>
                 {usbFound.map(c => (
@@ -768,7 +835,7 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
                 value={source}
                 onChange={e => setSource(e.target.value)}
                 placeholder={type === 'USB' ? '0' : 'rtsp://admin:password@192.168.1.100:554/stream'}
-                className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple font-mono"
+                className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent font-mono"
               />
             )}
             {(type === 'RTSP' || type === 'IP') && (
@@ -788,8 +855,36 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
               value={zone}
               onChange={e => setZone(e.target.value)}
               placeholder="Главный вход, Парковка..."
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
+              className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-accent"
             />
+          </div>
+
+          {/* Stream profiles — заглушка, пока backend не возвращает/не принимает */}
+          <div className="border border-kraken-border rounded-xl p-3 space-y-3">
+            <div className="text-kraken-muted text-[10px] font-bold uppercase tracking-widest">Параметры потоков (авто/шаблон)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной codec</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб codec</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Основной FPS</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg" placeholder="—" readOnly />
+              </div>
+              <div>
+                <label className="text-kraken-muted text-[10px] mb-0.5 block">Суб FPS</label>
+                <input type="text" value={''} onChange={() => {}}
+                  className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs rounded-lg" placeholder="—" readOnly />
+              </div>
+            </div>
+            <div className="text-kraken-disabled text-[10px]">Заполняются автоматически при добавлении камеры</div>
           </div>
 
           {/* IP Camera fields — shown for non-USB types */}
@@ -801,31 +896,31 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
                   <label className="text-kraken-muted text-[10px] mb-0.5 block">IP адрес</label>
                   <input type="text" value={ipAddress} onChange={e => setIpAddress(e.target.value)}
                     placeholder="192.168.1.100"
-                    className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono" />
+                    className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent font-mono" />
                 </div>
                 <div>
                   <label className="text-kraken-muted text-[10px] mb-0.5 block">Порт</label>
                   <input type="text" value={ipPort} onChange={e => setIpPort(e.target.value)}
                     placeholder="80"
-                    className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono" />
+                    className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent font-mono" />
                 </div>
                 <div>
                   <label className="text-kraken-muted text-[10px] mb-0.5 block">Логин</label>
                   <input type="text" value={username} onChange={e => setUsername(e.target.value)}
                     placeholder="admin"
-                    className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple" />
+                    className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" />
                 </div>
                 <div>
                   <label className="text-kraken-muted text-[10px] mb-0.5 block">Пароль</label>
                   <input type="password" value={password} onChange={e => setPassword(e.target.value)}
                     placeholder="••••••"
-                    className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple" />
+                    className="w-full bg-kraken-field border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-accent" />
                 </div>
               </div>
               {(type === 'Hikvision' || type === 'UNV') && (
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={useAnalytics} onChange={e => setUseAnalytics(e.target.checked)}
-                    className="w-3.5 h-3.5 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple" />
+                    className="w-3.5 h-3.5 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent" />
                   <div className="flex flex-col">
                     <span className="text-kraken-text text-[10px] font-semibold">Аналитика камеры</span>
                     <span className="text-[9px] text-kraken-disabled">Использовать AI камеры вместо Kraken AI</span>
@@ -841,10 +936,10 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
                 type="checkbox"
                 checked={smartRec}
                 onChange={e => setSmartRec(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple"
+                className="w-4 h-4 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent"
               />
               <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-purple transition-colors">Умная съёмка</span>
+                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-accent transition-colors">Умная съёмка</span>
                 <span className="text-[10px] text-kraken-disabled">Запись 15с при обнаружении</span>
               </div>
             </label>
@@ -854,10 +949,10 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
                 type="checkbox"
                 checked={chronicle}
                 onChange={e => setChronicle(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple"
+                className="w-4 h-4 rounded border-kraken-border text-kraken-accent focus:ring-kraken-accent"
               />
               <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-purple transition-colors">Фотохроника</span>
+                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-accent transition-colors">Фотохроника</span>
                 <span className="text-[10px] text-kraken-disabled">Снимок посетителя в день</span>
               </div>
             </label>
