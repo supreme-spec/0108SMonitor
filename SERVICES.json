@@ -1,0 +1,36 @@
+{
+  "name": "Smart Security Monitor",
+  "version": "2.4.1",
+  "description": "AI-powered video surveillance with GPU-accelerated face recognition",
+  "scripts": {
+    "start": "start.bat",
+    "dev": "vite",
+    "start:ts": "tsx src/server.ts",
+    "start:api": "tsx src/server.ts",
+    "start:face": "venv\\Scripts\\python.exe face_server.py",
+    "dev:full": "concurrently \"npm run start:face\" \"npm run start:api\" \"npm run dev\"",
+    "health": "curl -s http://localhost:3000/api/health",
+    "lint": "tsc --noEmit --skipLibCheck",
+    "test": "echo \"No test framework configured\""
+  },
+  "services": {
+    "frontend": {
+      "name": "Vite React Dev Server",
+      "port": 5173,
+      "command": "npm run dev",
+      "description": "Serves the React frontend"
+    },
+    "backend": {
+      "name": "Node.js API Server",
+      "port": 3000,
+      "command": "npm run start:ts",
+      "description": "REST API with GPU-enabled face recognition"
+    },
+    "faceEngine": {
+      "name": "Python Face Engine",
+      "port": 8001,
+      "command": "venv\\Scripts\\python.exe face_server.py",
+      "description": "InsightFace GPU face recognition service"
+    }
+  }
+}
