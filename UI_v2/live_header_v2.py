@@ -112,7 +112,7 @@ class CamChip(QtWidgets.QFrame):
         self._hov_timer.setInterval(16)
         self._hov_timer.timeout.connect(self._hov_step)
         self.pulse=_Pulse(self, speed=1.4)
-        self.setFixedSize(56,44)
+        self.setFixedSize(42,34)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self._sync_pulse()
 
@@ -153,20 +153,20 @@ class CamChip(QtWidgets.QFrame):
         bg=QtGui.QColor('#241c10' if self.active else _lerp_c(C_CHIP, C_CHIP_H, self._hover))
         p.setBrush(bg)
         p.setPen(QtCore.Qt.NoPen)
-        p.drawRoundedRect(r,9,9)
+        p.drawRoundedRect(r,8,8)
         col=C_ACC if self.active else _lerp_c(C_BD, C_BD_H, self._hover)
         pen=QtGui.QPen(QtGui.QColor(col))
         pen.setWidth(2 if self.active else 1)
         p.setPen(pen)
         p.setBrush(QtCore.Qt.NoBrush)
-        p.drawRoundedRect(r,9,9)
+        p.drawRoundedRect(r,8,8)
         p.setPen(QtGui.QColor(C_ACC if self.active else _lerp_c(C_DIM,C_TXT,self._hover)))
         f=p.font()
         f.setWeight(_BOLD if self.active else _MED)
-        f.setPointSize(12)
+        f.setPointSize(11)
         p.setFont(f)
-        p.drawText(QtCore.QRectF(r.x(), r.y(), r.width()-14, r.height()), _AC, '#%d'%self.idx)
-        self._dot(p, r.x()+r.width()-10, r.y()+11)
+        p.drawText(QtCore.QRectF(r.x(), r.y(), r.width()-12, r.height()), _AC, '#%d'%self.idx)
+        self._dot(p, r.x()+r.width()-8, r.y()+9)
 
     def _dot(self,p,cx,cy):
         col={'online':C_OK,'warn':C_WARN,'offline':C_OFF}.get(self.status,C_OFF)
@@ -402,9 +402,17 @@ class LiveHeader(QtWidgets.QFrame):
         # разделитель
         h.addWidget(_VSep())
 
-        # 2. Activ Buttons 1-10 (камеры)
+        # 2. Active Button "Зоны" сразу после логотипа
+        self.zones_btn=ToggleBtn('Зоны')
+        self.zones_btn.toggled.connect(self.zones_toggled.emit)
+        h.addWidget(self.zones_btn)
+
+        # разделитель
+        h.addWidget(_VSep())
+
+        # 3. Activ Buttons 1-10 (камеры)
         self.chips_row=QtWidgets.QHBoxLayout()
-        self.chips_row.setSpacing(6)
+        self.chips_row.setSpacing(5)
         self.chips={}
         for i in range(1, 11):
             cam = None
@@ -423,26 +431,23 @@ class LiveHeader(QtWidgets.QFrame):
         self.chips_row.addStretch(1)
         h.addLayout(self.chips_row, 1)
 
-        # 3. Active Buttons: Зоны, Блоки, Выпускай Кракена
+        # 4. Active Buttons: Блоки, Выпускай Кракена
         right=QtWidgets.QHBoxLayout()
         right.setSpacing(8)
-        self.zones_btn=ToggleBtn('Зоны')
-        self.zones_btn.toggled.connect(self.zones_toggled.emit)
         self.blocks_btn=ToggleBtn('Блоки')
         self.blocks_btn.toggled.connect(self.blocks_toggled.emit)
         self.release_btn=ToggleBtn('Выпускай Кракена')
         self.release_btn.toggled.connect(self.release_toggled.emit)
-        right.addWidget(self.zones_btn)
         right.addWidget(self.blocks_btn)
         right.addWidget(self.release_btn)
 
-        # 4. Колокольчик
+        # 5. Колокольчик
         self.bell=BellBadge()
         self.bell.set_count(2)
         self.bell.clicked.connect(self.bell_clicked.emit)
         right.addWidget(self.bell)
 
-        # 5. Бейдж "Охрана" (роль оператора)
+        # 6. Бейдж "Охрана" (роль оператора)
         self.profile=ProfileBadge()
         self.profile.set_role('Охрана','Security')
         self.profile.opened.connect(self.profile_opened.emit)
