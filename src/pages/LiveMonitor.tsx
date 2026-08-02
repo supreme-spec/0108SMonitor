@@ -823,8 +823,6 @@ export default function LiveMonitor({
           </DraggableBlock>
         )}
 
-        {/* Scale wrapper closing */}
-        </div>
       </div>
 
       {/* Modals */}
