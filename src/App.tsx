@@ -16,6 +16,7 @@ import Chronicle from './pages/Chronicle'
 import SmartRecording from './pages/SmartRecording'
 import Categories from './pages/Categories'
 import Requirements from './pages/Requirements'
+import RequirementsV2 from './ui_v2/RequirementsV2'
 import Confirmations from './pages/Confirmations'
 import type { Camera, KrakenEvent, AlertMessage, ConfirmationMessage, FaceDetection } from './types'
 import { apiFetch } from './api/client'
@@ -246,8 +247,10 @@ export default function App() {
         return <Events />
       case 'cameras':
         return <Cameras />
-      case 'requirements':
-        return <Requirements />
+        case 'requirements':
+          return <Requirements />
+        case 'requirements_v2':
+          return <RequirementsV2 />
       case 'settings':
       case 'users':
       case 'notifications':

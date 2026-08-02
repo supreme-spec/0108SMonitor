@@ -64,6 +64,7 @@ export default function Sidebar({ currentPage, onNavigate, onProjection, project
         </div>
         <NavItem id="cameras"       label="Камеры"        icon={Camera}    current={currentPage} onNavigate={onNavigate} />
         <NavItem id="requirements"  label="Требования"    icon={BookOpen}  current={currentPage} onNavigate={onNavigate} />
+        <NavItem id="requirements_v2" label="Требования (V2)" icon={BookOpen} current={currentPage} onNavigate={onNavigate} />
         <NavItem id="settings"      label="Система"       icon={Settings}  current={currentPage} onNavigate={onNavigate} />
       </nav>
 
