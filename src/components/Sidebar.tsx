@@ -1,6 +1,4 @@
-import { useState } from 'react'
 import { Video, Users, BookImage, Activity, Camera, Settings, Monitor, Grid2X2, BookOpen, Tag, UserCheck } from 'lucide-react'
-import logoImg from '../assets/images/einfach_logo_1783510147919.jpg'
 
 interface SidebarProps {
   currentPage: string
@@ -10,33 +8,8 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ currentPage, onNavigate, onProjection, projectionActive }: SidebarProps) {
-  const [logoError, setLogoError] = useState(false)
-
   return (
-    <div className="w-56 h-screen bg-kraken-base flex flex-col border-r border-kraken-border flex-shrink-0">
-      {/* Logo */}
-      <div className="px-4 py-4 flex items-center gap-3 border-b border-kraken-border">
-        <div className="w-12 h-12 rounded-full bg-black flex items-center justify-center flex-shrink-0 overflow-hidden shadow-glow-purple text-xl">
-          {logoError ? (
-            '🐙'
-          ) : (
-            <img
-              src={logoImg}
-              alt="Einfach Jugend"
-              className="w-full h-full object-cover rounded-full"
-              referrerPolicy="no-referrer"
-              onError={() => setLogoError(true)}
-            />
-          )}
-        </div>
-        <div className="flex flex-col min-w-0">
-          <div className="text-kraken-text font-bold text-base leading-none tracking-wider uppercase flex items-center gap-1.5">
-            <span className="text-kraken-purple font-black">KRAKEN</span>
-          </div>
-          <div className="text-kraken-disabled text-[9px] tracking-wider uppercase mt-1">Security Engine</div>
-        </div>
-      </div>
-
+    <div className="w-56 h-full bg-kraken-base flex flex-col border-r border-kraken-border flex-shrink-0">
       {/* Navigation */}
       <nav className="flex-1 px-3 py-3 flex flex-col gap-0.5 overflow-y-auto">
 

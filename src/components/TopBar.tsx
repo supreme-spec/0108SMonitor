@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Bell, ChevronDown, ChevronLeft, Camera as CameraIcon } from 'lucide-react'
+import { Bell, ChevronDown, Camera as CameraIcon } from 'lucide-react'
 import type { Camera } from '../types'
 import rusImg from '../assets/images/imperial_flag_full_bleed_1783510617289.jpg'
+import logoImg from '../assets/images/einfach_logo_1783510147919.jpg'
 
 interface TopBarProps {
   cameras: Camera[]
@@ -11,6 +12,7 @@ interface TopBarProps {
   onOpenAlerts: () => void
   releaseButton?: React.ReactNode
   onAvatarChange?: (file: File) => void
+  onNavToБД?: () => void
 }
 
 export default function TopBar({
@@ -21,10 +23,12 @@ export default function TopBar({
   onOpenAlerts,
   releaseButton,
   onAvatarChange,
+  onNavToБД,
 }: TopBarProps) {
   const selected = cameras.find(c => c.id === selectedCameraId)
   const isOnline = selected?.status === 'online'
   const [avatarSrc, setAvatarSrc] = useState<string>(rusImg)
+  const [logoError, setLogoError] = useState(false)
   const [showHint, setShowHint] = useState(false)
 
   const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -38,14 +42,41 @@ export default function TopBar({
   }
 
   return (
-    <div className="h-16 relative flex items-center bg-kraken-panel px-4 border-b border-kraken-border flex-shrink-0">
+    <div className="h-16 w-full relative flex items-center bg-kraken-panel px-4 border-b border-kraken-border flex-shrink-0">
 
-      {/* Left: back + camera selector + quick switcher + live */}
+      {/* Block #1: Logo + KRAKEN branding */}
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="w-12 h-12 rounded-full bg-black flex items-center justify-center flex-shrink-0 overflow-hidden shadow-glow-purple text-xl">
+          {logoError ? (
+            '🐙'
+          ) : (
+            <img
+              src={logoImg}
+              alt="Einfach Jugend"
+              className="w-full h-full object-cover rounded-full"
+              referrerPolicy="no-referrer"
+              onError={() => setLogoError(true)}
+            />
+          )}
+        </div>
+        <div className="flex flex-col min-w-0">
+          <div className="text-kraken-text font-bold text-base leading-none tracking-wider uppercase flex items-center gap-1.5">
+            <span className="text-kraken-purple font-black">KRAKEN</span>
+          </div>
+          <div className="text-kraken-disabled text-[9px] tracking-wider uppercase mt-1">Security Engine</div>
+        </div>
+      </div>
+
+      {/* Active "БД" button (replacing back button) */}
+      <button
+        onClick={onNavToБД}
+        className="ml-4 px-3 py-1.5 rounded-lg bg-kraken-purple/15 text-kraken-purple border border-kraken-purple text-xs font-semibold hover:bg-kraken-purple/30 transition-colors"
+      >
+        БД
+      </button>
+
+      {/* Left: camera selector + quick switcher + live */}
       <div className="flex items-center gap-3 flex-1">
-        <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-text transition-colors">
-          <ChevronLeft size={20} />
-        </button>
-
         {/* Camera dropdown */}
         <div className="relative">
           <select

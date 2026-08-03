@@ -275,39 +275,42 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-kraken-base">
-      <Sidebar
-        currentPage={page}
-        onNavigate={setPage}
-        onProjection={() => setShowProjection(p => !p)}
-        projectionActive={showProjection}
+    <div className="flex flex-col h-screen overflow-hidden bg-kraken-base">
+      <TopBar
+        cameras={cameras}
+        selectedCameraId={selectedCameraId}
+        onSelectCamera={setSelectedCameraId}
+        alertCount={alertHistory.length}
+        onOpenAlerts={() => setPage('events')}
+        onNavToБД={() => setPage('people')}
+        releaseButton={
+          <ReleaseButton
+            selectedCameraId={selectedCameraId}
+            latestFace={latestFace}
+            onAlert={handleAlert}
+          />
+        }
       />
 
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        <TopBar
-          cameras={cameras}
-          selectedCameraId={selectedCameraId}
-          onSelectCamera={setSelectedCameraId}
-          alertCount={alertHistory.length}
-          onOpenAlerts={() => setPage('events')}
-          releaseButton={
-            <ReleaseButton
-              selectedCameraId={selectedCameraId}
-              latestFace={latestFace}
-              onAlert={handleAlert}
-            />
-          }
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar
+          currentPage={page}
+          onNavigate={setPage}
+          onProjection={() => setShowProjection(p => !p)}
+          projectionActive={showProjection}
         />
 
-        {isManualRecording && (
-          <div className="absolute top-[4.5rem] right-6 flex items-center gap-2 bg-red-600/90 text-white px-3 py-1.5 rounded-full shadow-[0_0_15px_rgba(220,38,38,0.5)] z-50 animate-pulse font-bold text-sm tracking-widest backdrop-blur-sm border border-red-500/50">
-            <div className="w-2.5 h-2.5 bg-white rounded-full"></div>
-            ЗАПИСЬ ИДЕТ
-          </div>
-        )}
+        <div className="flex-1 flex flex-col overflow-hidden relative">
+          {isManualRecording && (
+            <div className="absolute top-[4.5rem] right-6 flex items-center gap-2 bg-red-600/90 text-white px-3 py-1.5 rounded-full shadow-[0_0_15px_rgba(220,38,38,0.5)] z-50 animate-pulse font-bold text-sm tracking-widest backdrop-blur-sm border border-red-500/50">
+              <div className="w-2.5 h-2.5 bg-white rounded-full"></div>
+              ЗАПИСЬ ИДЕТ
+            </div>
+          )}
 
-        <div className="flex-1 p-4 overflow-hidden">
-          {renderPage()}
+          <div className="flex-1 p-4 overflow-hidden">
+            {renderPage()}
+          </div>
         </div>
       </div>
 
