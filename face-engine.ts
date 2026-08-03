@@ -38,6 +38,8 @@ export interface DetectedFace {
   box: { x: number; y: number; width: number; height: number };
   score: number;
   descriptor?: Float32Array;
+  gender?: "male" | "female" | null;
+  age?: number | null;
 }
 
 export interface RecognitionMatch {
@@ -692,13 +694,15 @@ async function detectFacesFromServer(
     }
 
     const result = await response.json() as {
-      faces: Array<{ box: any; score: number; descriptor?: number[] }>;
+      faces: Array<{ box: any; score: number; descriptor?: number[]; gender?: string; age?: number }>;
     };
 
     return result.faces.map((f: any) => ({
       box: f.box,
       score: f.score,
       descriptor: f.descriptor ? new Float32Array(f.descriptor) : undefined,
+      gender: f.gender ?? null,
+      age: f.age ?? null,
     }));
   } catch (e) {
     logError(e as Error, { context: "Детекция с Python-сервера" });
@@ -1309,6 +1313,8 @@ export async function assessPhotoQuality(
           yaw: primary.yaw,
           roll: primary.roll,
           face_count: res.face_count,
+          gender: res.primary.gender ?? null,
+          age: res.primary.age ?? null,
         }
       : null;
 

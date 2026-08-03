@@ -655,11 +655,89 @@ async def get_status() -> Dict[str, Any]:
 
 @app.get("/health")
 async def get_health() -> Dict[str, Any]:
-    """Health check endpoint."""
-    return {
+    """Health check endpoint with full AI module status."""
+    import platform
+    
+    result: Dict[str, Any] = {
         "status": "ok",
         "initialized": is_initialized,
+        "version": "4.0.0",
+        "system": {
+            "platform": platform.system(),
+            "python": platform.python_version(),
+        },
     }
+    
+    # CUDA status
+    import subprocess
+    cuda_available = False
+    cuda_version = None
+    try:
+        result_cuda = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result_cuda.returncode == 0:
+            cuda_version = result_cuda.stdout.strip()
+            cuda_available = True
+    except Exception:
+        pass
+    
+    result["cuda_available"] = cuda_available
+    result["cuda_version"] = cuda_version
+    
+    # GPU status
+    gpu_detected = False
+    gpu_name = None
+    gpu_available = False
+    try:
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        gpu_detected = "CUDAExecutionProvider" in providers or "DmlExecutionProvider" in providers
+        gpu_available = "CUDAExecutionProvider" in providers or "DmlExecutionProvider" in providers
+        
+        if gpu_available:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "Unknown GPU"
+            except Exception:
+                gpu_name = "GPU (ONNX)"
+    except Exception:
+        pass
+    
+    result["gpu_detected"] = gpu_detected
+    result["gpu_name"] = gpu_name
+    result["gpu_available"] = gpu_available
+    result["gpu_provider"] = used_provider if is_initialized else None
+    
+    # AI Modules status
+    modules: Dict[str, Any] = {}
+    
+    # SCRFD - TODO: implement detector router
+    modules["scrfd"] = {"active": False, "status": "pending", "version": "0.1.0"}
+    
+    # ArcFace (InsightFace)
+    if is_initialized and face_app is not None:
+        modules["arcface"] = {"active": True, "status": "ok", "version": "buffalo_l"}
+    else:
+        modules["arcface"] = {"active": False, "status": "pending", "version": "buffalo_l"}
+    
+    # FAISS
+    modules["faiss"] = {"active": faiss_index is not None, "status": "ok" if faiss_index is not None else "pending", "version": "1.11.0"}
+    
+    # ByteTrack - TODO: implement tracker
+    modules["bytetrack"] = {"active": False, "status": "pending", "version": "1.0.0"}
+    
+    # YOLO-Face - TODO: implement detector
+    modules["yoloface"] = {"active": False, "status": "pending", "version": "0.1.0"}
+    
+    # RetinaFace - TODO: implement detector
+    modules["retinaface"] = {"active": False, "status": "pending", "version": "0.1.0"}
+    
+    result["modules"] = modules
+    
+    return result
 
 
 @app.post("/detect-faces", dependencies=[Depends(verify_api_key)])
@@ -704,6 +782,9 @@ async def detect_faces(
                     "height": box[3] - box[1],
                 },
                 "score": float(face.det_score),
+                "gender": int(face.gender) if hasattr(face, "gender") and face.gender is not None else None,
+                "gender_str": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
+                "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
             }
             if with_descriptors and hasattr(face, "embedding") and face.embedding is not None:
                 detection["descriptor"] = face.embedding.tolist()
@@ -769,6 +850,8 @@ async def assess_quality(image: UploadFile = File(...)):
             face_payloads.append({
                 "box": {"x": box[0], "y": box[1], "width": box[2] - box[0], "height": box[3] - box[1]},
                 "score": float(face.det_score),
+                "gender": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
+                "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
                 "quality": quality,
                 "pose": {"pitch": quality["pitch"], "yaw": quality["yaw"], "roll": quality["roll"]},
                 "enrollment_issues": enrollment_issues(quality),
@@ -799,6 +882,8 @@ async def assess_quality(image: UploadFile = File(...)):
             "primary": {
                 "score": float(primary.det_score),
                 "quality": primary_quality,
+                "gender": ("male" if getattr(primary, "gender", None) == 0 else "female") if hasattr(primary, "gender") and primary.gender is not None else None,
+                "age": int(primary.age) if hasattr(primary, "age") and primary.age is not None else None,
             },
             "faces": face_payloads,
         }
@@ -973,6 +1058,8 @@ async def recognize(
             "status": "ok" if matches else ("needs_confirmation" if needs_confirmation_data else "unknown"),
             "total_vectors": faiss_index.ntotal if faiss_index is not None else 0,
             "best_similarity": best_sim,
+            "gender": ("male" if getattr(primary_face, "gender", None) == 0 else "female") if hasattr(primary_face, "gender") and primary_face.gender is not None else None,
+            "age": int(primary_face.age) if hasattr(primary_face, "age") and primary_face.age is not None else None,
         }
 
         if needs_confirmation_data and not matches:

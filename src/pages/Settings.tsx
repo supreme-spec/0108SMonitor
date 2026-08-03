@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { apiFetch } from '../api/client'
-import { Activity, Database, Download, RefreshCw, FileText, Camera, AlertTriangle, Shield, Volume2, VolumeX, Upload, Play, Tag, Zap } from 'lucide-react'
+import { Activity, Database, Download, RefreshCw, FileText, Camera, AlertTriangle, Shield, Volume2, VolumeX, Upload, Play, Tag, Zap, Info, Brain, BarChart3, Target, Eye, Sparkles, Play as PlayIcon, CheckCircle, XCircle } from 'lucide-react'
 import velesLogo from '../assets/images/veles_voyage_logo_1783510761883.jpg'
 import ConfirmModal, { AlertModal } from '../components/ConfirmModal'
 import {
@@ -34,6 +34,17 @@ interface HealthData {
   setup_recommendation?: string
   onnx_version?: string
   onnx_package?: string
+  // AI Status fields
+  cuda_version?: string
+  cuda_available?: boolean
+  modules?: {
+    scrfd?: { active: boolean; status: 'ok' | 'error' | 'pending'; version?: string }
+    arcface?: { active: boolean; status: 'ok' | 'error' | 'pending'; version?: string }
+    faiss?: { active: boolean; status: 'ok' | 'error' | 'pending'; version?: string }
+    bytetrack?: { active: boolean; status: 'ok' | 'error' | 'pending'; version?: string }
+    yoloface?: { active: boolean; status: 'ok' | 'error' | 'pending'; version?: string }
+    retinaface?: { active: boolean; status: 'ok' | 'error' | 'pending'; version?: string }
+  }
 }
 
 export default function Settings() {
@@ -70,6 +81,25 @@ export default function Settings() {
   const [reindexMsg, setReindexMsg] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
+  const [modules, setModules] = useState<{
+    detectors: {
+      scrfd: boolean
+      yoloface: boolean
+      retinaface: boolean
+    }
+    recognizers: {
+      arcface: boolean
+      adaface: boolean
+    }
+    trackers: {
+      bytetrack: boolean
+      botsort: boolean
+    }
+  }>({
+    detectors: { scrfd: true, yoloface: false, retinaface: false },
+    recognizers: { arcface: true, adaface: false },
+    trackers: { bytetrack: false, botsort: false }
+  })
 
   // GPU
   const [gpuEnabled, setGpuEnabled] = useState(true)
@@ -314,6 +344,12 @@ export default function Settings() {
     } catch (e: any) {
       setGpuMsg(`❌ ${e.message}`)
     }
+  }
+
+  const handleToggleModule = async (category: keyof typeof modules, module: string, enabled: boolean) => {
+    const next = { ...modules, [category]: { ...modules[category], [module]: enabled } }
+    setModules(next)
+    // TODO: вызвать API для сохранения настроек модулей
   }
 
 
@@ -1041,6 +1077,549 @@ export default function Settings() {
             mlMsg.startsWith('✅') ? 'text-kraken-green bg-kraken-green/10' : 'text-kraken-red bg-kraken-red/10'
           }`}>
             {mlMsg}
+          </div>
+        )}
+      </div>
+
+      {/* AI Modules */}
+      <div className="panel p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Activity size={18} className="text-kraken-purple" />
+          <span className="text-kraken-text font-semibold">AI Modules</span>
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-500 text-white animate-pulse">
+            Экспертный режим
+          </span>
+        </div>
+        <div className="bg-kraken-base rounded-xl p-4 mb-4 border border-kraken-purple/10">
+          <div className="flex items-start gap-3">
+            <div className="mt-1 text-kraken-purple">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-kraken-text font-semibold text-sm mb-1">Архитектура модулей</h3>
+              <p className="text-kraken-muted text-xs leading-relaxed">
+                Этот раздел управляет инфраструктурой AI-модулей. Модули организованы по функциональности:
+                детекторы, рекогнайзеры, трекеры, базы данных и маршрутизатор.
+              </p>
+            </div>
+          </div>
+        </div>
+        <p className="text-kraken-muted text-sm mb-4">
+          Управление AI-модулями системы. Запланированные компоненты для расширения функциональности.
+        </p>
+
+        <div className="grid grid-cols-1 gap-3">
+          {/* SCRFD */}
+          <div className={`p-4 rounded-xl border transition-all ${modules.detectors.scrfd ? 'bg-kraken-green/10 border-kraken-green/30' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center flex-shrink-0">
+                  <Target size={20} className="text-green-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">SCRFD</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">GPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    SCRFD детектор • InsightFace • Высокая скорость
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${
+                  modules.detectors.scrfd ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+                }`}>
+                  {modules.detectors.scrfd ? '✓ Активен' : '✗ Выкл'}
+                </div>
+                <button
+                  disabled={true}
+                  className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-purple/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                >
+                  Настроить
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ArcFace */}
+          <div className="p-4 rounded-xl border bg-kraken-hover border-kraken-border">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                  <Brain size={20} className="text-purple-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">ArcFace</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 font-medium">CPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    Высокоточное распознавание • LFW 99.65% • Встроенный трекинг
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-bold px-2 py-1 rounded-full bg-gray-500/20 text-gray-400 flex-shrink-0">
+                  ⏳ Не установлен
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleToggleModule('recognizers', 'arcface', !modules.recognizers.arcface)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      modules.recognizers.arcface 
+                        ? 'bg-green-500 text-white hover:bg-green-600' 
+                        : 'bg-kraken-base hover:bg-purple-500/20 text-kraken-text'
+                    }`}
+                  >
+                    {modules.recognizers.arcface ? 'Активировать' : 'Настроить'}
+                  </button>
+                  <button
+                    disabled={true}
+                    className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-blue/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Информация
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* FAISS */}
+          <div className={`p-4 rounded-xl border transition-all ${modules.faiss ? 'bg-kraken-green/10 border-kraken-green/30' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center flex-shrink-0">
+                  <BarChart3 size={20} className="text-green-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">FAISS</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">GPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    Быстрый поиск по эмбеддингам • IVF индекс • 119 векторов
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${
+                  modules.faiss ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+                }`}>
+                  {modules.faiss ? '✓ Активен' : '✗ Выкл'}
+                </div>
+                <button
+                  disabled={true}
+                  className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-purple/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                >
+                  Настроить
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ByteTrack */}
+          <div className="p-4 rounded-xl border bg-kraken-hover border-kraken-border">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                  <PlayIcon size={20} className="text-yellow-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">ByteTrack</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 font-medium">CPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    Многозадачный трекинг • Kalman фильтр • BoT-SORT
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-bold px-2 py-1 rounded-full bg-gray-500/20 text-gray-400 flex-shrink-0">
+                  ⏳ Не установлен
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleToggleModule('trackers', 'bytetrack', !modules.trackers.bytetrack)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      modules.trackers.bytetrack 
+                        ? 'bg-green-500 text-white hover:bg-green-600' 
+                        : 'bg-kraken-base hover:bg-yellow-500/20 text-kraken-text'
+                    }`}
+                  >
+                    {modules.trackers.bytetrack ? 'Активировать' : 'Настроить'}
+                  </button>
+                  <button
+                    disabled={true}
+                    className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-blue/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Информация
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* YOLO-Face */}
+          <div className="p-4 rounded-xl border bg-kraken-hover border-kraken-border">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                  <Target size={20} className="text-yellow-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">YOLO-Face</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400 font-medium">GPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    Детектор лиц • YOLOv8 • Высокая скорость
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-bold px-2 py-1 rounded-full bg-gray-500/20 text-gray-400 flex-shrink-0">
+                  ⏳ Не установлен
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleToggleModule('detectors', 'yoloface', !modules.detectors.yoloface)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      modules.detectors.yoloface 
+                        ? 'bg-green-500 text-white hover:bg-green-600' 
+                        : 'bg-kraken-base hover:bg-yellow-500/20 text-kraken-text'
+                    }`}
+                  >
+                    {modules.detectors.yoloface ? 'Активировать' : 'Настроить'}
+                  </button>
+                  <button
+                    disabled={true}
+                    className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-blue/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Информация
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RetinaFace */}
+          <div className="p-4 rounded-xl border bg-kraken-hover border-kraken-border">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center flex-shrink-0">
+                  <Eye size={20} className="text-red-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">RetinaFace</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">GPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    Высокоточный детектор • Multi-scale • Атрибуты
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-bold px-2 py-1 rounded-full bg-gray-500/20 text-gray-400 flex-shrink-0">
+                  ⏳ Не установлен
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleToggleModule('detectors', 'retinaface', !modules.detectors.retinaface)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      modules.detectors.retinaface 
+                        ? 'bg-green-500 text-white hover:bg-green-600' 
+                        : 'bg-kraken-base hover:bg-red-500/20 text-kraken-text'
+                    }`}
+                  >
+                    {modules.detectors.retinaface ? 'Активировать' : 'Настроить'}
+                  </button>
+                  <button
+                    disabled={true}
+                    className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-blue/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Информация
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* AdaFace */}
+          <div className="p-4 rounded-xl border bg-kraken-hover border-kraken-border">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                  <Sparkles size={20} className="text-purple-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-kraken-text font-semibold">AdaFace</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 font-medium">CPU</span>
+                  </div>
+                  <div className="text-kraken-muted text-xs leading-snug">
+                    Адаптивное качество • Устойчив к освещению • Низкое качество
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-bold px-2 py-1 rounded-full bg-gray-500/20 text-gray-400 flex-shrink-0">
+                  ⏳ Не установлен
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleToggleModule('recognizers', 'adaface', !modules.recognizers.adaface)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      modules.recognizers.adaface 
+                        ? 'bg-green-500 text-white hover:bg-green-600' 
+                        : 'bg-kraken-base hover:bg-purple-500/20 text-kraken-text'
+                    }`}
+                  >
+                    {modules.recognizers.adaface ? 'Активировать' : 'Настроить'}
+                  </button>
+                  <button
+                    disabled={true}
+                    className="px-3 py-1.5 rounded-lg bg-kraken-base hover:bg-kraken-blue/20 text-kraken-text text-xs font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Информация
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 p-4 rounded-lg bg-kraken-blue/10 border border-kraken-blue/20">
+          <div className="flex items-start gap-3">
+            <Info size={18} className="text-blue-400 flex-shrink-0 mt-0.5" />
+            <div className="text-blue-400/90 text-xs leading-relaxed">
+              <strong className="block mb-1">Экспертный режим</strong>
+              Этот раздел находится в стадии подготовки инфраструктуры. 
+              Нажатие кнопок "Установить" пока не активирует функциональность.
+              <br/>
+              <span className="mt-2 block">Версия: <code className="bg-kraken-base px-1.5 py-0.5 rounded text-[10px]">v1.0.0-alpha</code> • Пакет: <code className="bg-kraken-base px-1.5 py-0.5 rounded text-[10px]">backend/ai/</code></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── AI Status ── */}
+      <div className="panel p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Activity size={18} className={health?.modules ? 'text-kraken-green' : 'text-kraken-purple'} />
+            <span className="text-kraken-text font-semibold">AI Status</span>
+          </div>
+          <button onClick={fetchHealth} className="btn-ghost flex items-center gap-1.5 text-xs py-1 px-2">
+            <RefreshCw size={12} />
+            Обновить
+          </button>
+        </div>
+        <p className="text-kraken-muted text-sm mb-4">
+          Состояние AI-модулей системы
+        </p>
+
+        <div className="grid grid-cols-2 gap-3">
+          {/* CUDA */}
+          <div className={`p-4 rounded-xl border ${health?.cuda_available ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.cuda_available ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <Zap size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">CUDA</span>
+                  {health?.cuda_version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      {health.cuda_version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.cuda_available ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.cuda_available ? '✔ Активна' : '○ Отключена'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* GPU */}
+          <div className={`p-4 rounded-xl border ${health?.gpu_available ? 'bg-green-500/10 border-green-500/20' : health?.gpu_detected ? 'bg-yellow-500/10 border-yellow-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.gpu_available ? 'bg-green-500/20 text-green-400' : health?.gpu_detected ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <Activity size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">GPU</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                    {health?.gpu_name || '—'}
+                  </span>
+                </div>
+                <div className={`text-xs font-bold ${health?.gpu_available ? 'text-green-400' : health?.gpu_detected ? 'text-yellow-400' : 'text-gray-400'}`}>
+                  {health?.gpu_available ? '✔ Активен' : health?.gpu_detected ? '○ Определён' : '✗ Не обнаружен'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* SCRFD */}
+          <div className={`p-4 rounded-xl border ${health?.modules?.scrfd?.status === 'ok' ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.modules?.scrfd?.status === 'ok' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <Target size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">SCRFD</span>
+                  {health?.modules?.scrfd?.version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      v{health.modules.scrfd.version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.modules?.scrfd?.status === 'ok' ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.modules?.scrfd?.status === 'ok' ? '✔ Активен' : '— Не установлен'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ArcFace */}
+          <div className={`p-4 rounded-xl border ${health?.modules?.arcface?.status === 'ok' ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.modules?.arcface?.status === 'ok' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <Brain size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">ArcFace</span>
+                  {health?.modules?.arcface?.version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      {health.modules.arcface.version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.modules?.arcface?.status === 'ok' ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.modules?.arcface?.status === 'ok' ? '✔ Активен' : '— Не установлен'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* FAISS */}
+          <div className={`p-4 rounded-xl border ${health?.modules?.faiss?.status === 'ok' ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.modules?.faiss?.status === 'ok' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <BarChart3 size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">FAISS</span>
+                  {health?.modules?.faiss?.version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      {health.modules.faiss.version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.modules?.faiss?.status === 'ok' ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.modules?.faiss?.status === 'ok' ? '✔ Активен' : '— Не установлен'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ByteTrack */}
+          <div className={`p-4 rounded-xl border ${health?.modules?.bytetrack?.status === 'ok' ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.modules?.bytetrack?.status === 'ok' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <PlayIcon size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">ByteTrack</span>
+                  {health?.modules?.bytetrack?.version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      {health.modules.bytetrack.version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.modules?.bytetrack?.status === 'ok' ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.modules?.bytetrack?.status === 'ok' ? '✔ Активен' : '— Не установлен'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* YOLO-Face */}
+          <div className={`p-4 rounded-xl border ${health?.modules?.yoloface?.status === 'ok' ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.modules?.yoloface?.status === 'ok' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <Target size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">YOLO-Face</span>
+                  {health?.modules?.yoloface?.version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      {health.modules.yoloface.version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.modules?.yoloface?.status === 'ok' ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.modules?.yoloface?.status === 'ok' ? '✔ Активен' : '— Не установлен'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RetinaFace */}
+          <div className={`p-4 rounded-xl border ${health?.modules?.retinaface?.status === 'ok' ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.modules?.retinaface?.status === 'ok' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                <Eye size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-kraken-text font-semibold text-sm">RetinaFace</span>
+                  {health?.modules?.retinaface?.version && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                      {health.modules.retinaface.version}
+                    </span>
+                  )}
+                </div>
+                <div className={`text-xs font-bold ${health?.modules?.retinaface?.status === 'ok' ? 'text-green-400' : 'text-gray-400'}`}>
+                  {health?.modules?.retinaface?.status === 'ok' ? '✔ Активен' : '— Не установлен'}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Summary */}
+        {health?.modules && (
+          <div className="mt-4 p-4 rounded-xl bg-kraken-hover border border-kraken-border">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-kraken-muted">Всего модулей:</span>
+              <span className="text-kraken-text font-bold">
+                {Object.keys(health.modules).length}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs mt-1">
+              <span className="text-kraken-muted">Активных:</span>
+              <span className="text-green-400 font-bold">
+                {Object.values(health.modules).filter(m => m?.status === 'ok').length}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs mt-1">
+              <span className="text-kraken-muted">Недоступных:</span>
+              <span className="text-gray-400 font-bold">
+                {Object.values(health.modules).filter(m => m?.status === 'pending' || !m?.status).length}
+              </span>
+            </div>
           </div>
         )}
       </div>

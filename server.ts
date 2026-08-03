@@ -190,7 +190,7 @@ function fixFilesEncoding(files: Express.Multer.File[]): void {
 function normalizePersonName(name: string): string {
   if (!name) return name;
   name = name.replace(/\s*\([^\)]*\)\s*/g, ' ').trim();
-  const normalized = name.replace(/\s+/g, ' ').trim().replace(/^[\s\-_]+|[\s\-_]+$/g, '');
+  const normalized = name.replace(/\s+/g, ' ').replace(/[-_]+/g, ' ').trim().replace(/^[\s\-_]+|[\s\-_]+$/g, '');
   return normalized.split(' ').map(w => {
     if (!w || /^\d+$/.test(w)) return w;
     if (w.includes('-')) {
@@ -209,6 +209,27 @@ function normalizePositionName(pos: string): string {
     if (!w || /^\d+$/.test(w)) return w;
     return i === 0 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase();
   }).join(' ');
+}
+
+/**
+ * Word-order-insensitive FIO comparison.
+ * "Ivan Ivanov" matches "Ivanov Ivan" — same word set, any order.
+ * Underscores/dashes are treated as word separators.
+ */
+function namesMatchFIO(a: string, b: string): boolean {
+  const normalize = (s: string) =>
+    s
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase()
+      .split(' ')
+      .filter((w) => w.length > 0)
+      .sort();
+  const wa = normalize(a);
+  const wb = normalize(b);
+  if (wa.length !== wb.length) return false;
+  return wa.every((w, i) => w === wb[i]);
 }
 
 // ── STATEFUL IN-MEMORY DATABASES ──
@@ -513,7 +534,7 @@ app.post(["/api/cameras/unv/notification", "/api/cameras/unv/notification/", "/a
       let matchedPerson: any = null;
       if (personName && personName.toLowerCase() !== "unknown" && personName.toLowerCase() !== "неизвестный") {
         const allPersons = await prisma.person.findMany({ select: { id: true, name: true, category: true, photo_path: true, visit_count: true } });
-        matchedPerson = allPersons.find((p: any) => p.name.toLowerCase() === personName!.toLowerCase());
+        matchedPerson = allPersons.find((p: any) => namesMatchFIO(p.name, personName!));
       }
 
       if (matchedPerson) {
@@ -968,22 +989,14 @@ app.get(["/api/persons", "/api/persons/"], async (req, res) => {
 
 app.get(["/api/persons/check_duplicate", "/api/persons/check_duplicate/"], async (req, res) => {
   try {
-    const name = (req.query.name as string || "").trim().toLowerCase();
+    const name = (req.query.name as string || "").trim();
     if (!name) {
       return res.json({ duplicate: false, matches: [] });
     }
 
-    const allPersons = await prisma.person.findMany({
-      select: {
-        id: true,
-        name: true,
-        category: true
-      }
-    });
-
-    const matches = allPersons.filter((p: any) => 
-      (p.name || "").toLowerCase().includes(name)
-    );
+    const matches = await prisma.$queryRaw<
+      Array<{ id: number; name: string; category: string }>
+    >`SELECT id, name, category FROM Person WHERE LOWER(name) LIKE '%' || LOWER(${name}) || '%'`;
 
     res.json({
       duplicate: matches.length > 0,
@@ -1259,7 +1272,7 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
         // Fallback: toLowerCase match если Prisma не нашла точное совпадение
         const existingPerson = existingPersons[0]
           ?? (await prisma.person.findMany({ include: { photos: true } }))
-              .find((p: any) => p.name.toLowerCase() === cleanName.toLowerCase())
+              .find((p: any) => namesMatchFIO(p.name, cleanName))
           ?? null;
 
         let personId: number;
@@ -3841,19 +3854,24 @@ app.post(["/api/face-engine/detect", "/api/face-engine/detect/"], upload.any(), 
   }
 
   try {
-    const filePath = path.join(photosDir, files[0].filename);
     const fast = req.query.fast === "true";
-    const faces = fast
-      ? await detectFacesFast(filePath)
-      : await detectFaces(filePath);
+    const allFaces: any[] = [];
+
+    for (const f of files) {
+      const filePath = path.join(photosDir, f.filename);
+      const faces = fast
+        ? await detectFacesFast(filePath)
+        : await detectFaces(filePath);
+      allFaces.push(...faces.map(face => ({ ...face, file: f.filename })));
+    }
 
     res.json({
-      face_count: faces.length,
-      faces: faces.map(f => ({
+      face_count: allFaces.length,
+      faces: allFaces.map(f => ({
         box: f.box,
         score: f.score,
-        age: undefined,
-        gender: undefined,
+        age: f.age ?? undefined,
+        gender: f.gender ?? undefined,
         genderProbability: undefined,
         expression: undefined,
         expressionProbability: undefined,
