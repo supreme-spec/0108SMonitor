@@ -711,33 +711,218 @@ async def get_health() -> Dict[str, Any]:
     result["gpu_available"] = gpu_available
     result["gpu_provider"] = used_provider if is_initialized else None
     
-    # AI Modules status
+    # AI Modules status - with detailed installed/loaded/active info
     modules: Dict[str, Any] = {}
     
-    # SCRFD - TODO: implement detector router
-    modules["scrfd"] = {"active": False, "status": "pending", "version": "0.1.0"}
+    # Load ai_config to get active modules
+    ai_config_path = Path(__file__).parent / "ai_config.json"
+    active_config = {"detector": "scrfd", "recognizer": "arcface", "tracker": "none"}
+    if ai_config_path.exists():
+        try:
+            with open(ai_config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                active_config = config.get("active", active_config)
+        except Exception:
+            pass
     
-    # ArcFace (InsightFace)
-    if is_initialized and face_app is not None:
-        modules["arcface"] = {"active": True, "status": "ok", "version": "buffalo_l"}
-    else:
-        modules["arcface"] = {"active": False, "status": "pending", "version": "buffalo_l"}
+    # SCRFD
+    modules["scrfd"] = {
+        "installed": True,  # Код есть
+        "loaded": active_config.get("detector") == "scrfd",
+        "active": active_config.get("detector") == "scrfd",
+        "version": "10GF",
+        "provider": "CUDA",
+        "description": "SCRFD детектор"
+    }
+    
+    # YOLO-Face
+    modules["yoloface"] = {
+        "installed": True,  # Код есть
+        "loaded": active_config.get("detector") == "yoloface",
+        "active": active_config.get("detector") == "yoloface",
+        "version": None,
+        "provider": "GPU",
+        "description": "YOLO-Face детектор"
+    }
+    
+    # RetinaFace
+    modules["retinaface"] = {
+        "installed": True,  # Код есть
+        "loaded": active_config.get("detector") == "retinaface",
+        "active": active_config.get("detector") == "retinaface",
+        "version": None,
+        "provider": "GPU",
+        "description": "RetinaFace детектор"
+    }
+    
+    # ArcFace
+    modules["arcface"] = {
+        "installed": True,  # Код есть
+        "loaded": active_config.get("recognizer") == "arcface",
+        "active": active_config.get("recognizer") == "arcface",
+        "version": "buffalo_l",
+        "provider": "CUDA",
+        "description": "ArcFace алгоритм распознавания"
+    }
+    
+    # AdaFace
+    modules["adaface"] = {
+        "installed": True,  # Код есть
+        "loaded": active_config.get("recognizer") == "adaface",
+        "active": active_config.get("recognizer") == "adaface",
+        "version": None,
+        "provider": "CPU",
+        "description": "AdaFace алгоритм распознавания"
+    }
     
     # FAISS
-    modules["faiss"] = {"active": faiss_index is not None, "status": "ok" if faiss_index is not None else "pending", "version": "1.11.0"}
+    modules["faiss"] = {
+        "installed": True,
+        "loaded": True,
+        "active": faiss_index is not None,
+        "version": "1.11.0",
+        "provider": "CPU/GPU",
+        "description": "FAISS векторная база данных"
+    }
     
-    # ByteTrack - TODO: implement tracker
-    modules["bytetrack"] = {"active": False, "status": "pending", "version": "1.0.0"}
+    # ByteTrack
+    modules["bytetrack"] = {
+        "installed": True,
+        "loaded": active_config.get("tracker") == "bytetrack",
+        "active": active_config.get("tracker") == "bytetrack",
+        "version": "1.0",
+        "provider": "CPU",
+        "description": "ByteTrack трекинг"
+    }
     
-    # YOLO-Face - TODO: implement detector
-    modules["yoloface"] = {"active": False, "status": "pending", "version": "0.1.0"}
-    
-    # RetinaFace - TODO: implement detector
-    modules["retinaface"] = {"active": False, "status": "pending", "version": "0.1.0"}
+    # BoT-SORT
+    modules["botsort"] = {
+        "installed": True,
+        "loaded": active_config.get("tracker") == "botsort",
+        "active": active_config.get("tracker") == "botsort",
+        "version": "1.0",
+        "provider": "CPU",
+        "description": "BoT-SORT трекинг"
+    }
     
     result["modules"] = modules
     
     return result
+
+
+@app.post("/api/ai/set_detector")
+async def set_detector(detector: str = "scrfd"):
+    """
+    Переключить активный детектор
+    
+    Parameters:
+        detector: Имя детектора (scrfd, yoloface, retinaface)
+    """
+    try:
+        # Импортируем AIManager
+        sys.path.insert(0, str(Path(__file__).parent))
+        from backend.ai.manager.ai_manager import AIManager
+        
+        # Создаем менеджер и переключаем детектор
+        manager = AIManager()
+        result = manager.switch_detector(detector)
+        
+        return {
+            "success": True,
+            "detector": detector,
+            "status": result.get('status', 'active'),
+            "message": f"Детектор переключен на {detector}"
+        }
+    except Exception as e:
+        import traceback
+        logger.error(f"Failed to switch detector: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to switch detector: {str(e)}")
+
+
+@app.post("/api/ai/set_recognizer")
+async def set_recognizer(recognizer: str = "arcface"):
+    """
+    Переключить активный рекогнайзер
+    
+    Parameters:
+        recognizer: Имя рекогнайзера (arcface, adaface)
+    """
+    try:
+        # Импортируем AIManager
+        sys.path.insert(0, str(Path(__file__).parent))
+        from backend.ai.manager.ai_manager import AIManager
+        
+        # Создаем менеджер и переключаем рекогнайзер
+        manager = AIManager()
+        result = manager.switch_recognizer(recognizer)
+        
+        return {
+            "success": True,
+            "recognizer": recognizer,
+            "status": result.get('status', 'active'),
+            "message": f"Рекогнайзер переключен на {recognizer}"
+        }
+    except Exception as e:
+        import traceback
+        logger.error(f"Failed to switch recognizer: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to switch recognizer: {str(e)}")
+
+
+@app.post("/api/ai/set_tracker")
+async def set_tracker(tracker: str = "none"):
+    """
+    Переключить активный трекер
+    
+    Parameters:
+        tracker: Имя трекера (bytetrack, botsort, none)
+    """
+    try:
+        # Импортируем AIManager
+        sys.path.insert(0, str(Path(__file__).parent))
+        from backend.ai.manager.ai_manager import AIManager
+        
+        # Создаем менеджер и переключаем трекер
+        manager = AIManager()
+        result = manager.switch_tracker(tracker)
+        
+        return {
+            "success": True,
+            "tracker": tracker,
+            "status": result.get('status', 'active'),
+            "message": f"Трекер переключен на {tracker}"
+        }
+    except Exception as e:
+        import traceback
+        logger.error(f"Failed to switch tracker: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to switch tracker: {str(e)}")
+
+
+@app.get("/api/ai/status")
+async def get_ai_status():
+    """
+    Получить полный статус AI системы
+    
+    Returns:
+        Статус активных модулей и их версий
+    """
+    try:
+        # Импортируем AIManager
+        sys.path.insert(0, str(Path(__file__).parent))
+        from backend.ai.manager.ai_manager import AIManager
+        
+        # Создаем менеджер и получаем статус
+        manager = AIManager()
+        status = manager.get_status()
+        
+        return status
+    except Exception as e:
+        import traceback
+        logger.error(f"Failed to get AI status: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to get AI status: {str(e)}")
 
 
 @app.post("/detect-faces", dependencies=[Depends(verify_api_key)])

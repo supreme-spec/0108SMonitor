@@ -1420,10 +1420,23 @@ export default function Settings() {
           </button>
         </div>
         <p className="text-kraken-muted text-sm mb-4">
-          Состояние AI-модулей системы
+          Подробный статус AI-модулей: Installed, Loaded, Active, Version
         </p>
 
-        <div className="grid grid-cols-2 gap-3">
+        {/* AI Module Status Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-kraken-border">
+                <th className="pb-2 font-semibold text-kraken-text">Модуль</th>
+                <th className="pb-2 font-semibold text-kraken-text">Installed</th>
+                <th className="pb-2 font-semibold text-kraken-text">Loaded</th>
+                <th className="pb-2 font-semibold text-kraken-text">Active</th>
+                <th className="pb-2 font-semibold text-kraken-text">Version</th>
+                <th className="pb-2 font-semibold text-kraken-text">Действие</th>
+              </tr>
+            </thead>
+            <tbody className="space-y-2">
           {/* CUDA */}
           <div className={`p-4 rounded-xl border ${health?.cuda_available ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
             <div className="flex items-start gap-3">

@@ -1,74 +1,77 @@
 {
   "version": "1.0.0",
-  "modules": {
-    "detectors": {
-      "scrfd": {
-        "enabled": true,
-        "status": "active",
-        "version": "10GF",
-        "provider": "CUDA",
-        "description": "SCRFD детектор от InsightFace (buffalo_l)",
-        "priority": 1
-      },
-      "yoloface": {
-        "enabled": false,
-        "status": "not_installed",
-        "version": null,
-        "provider": "GPU",
-        "description": "YOLO-Face детектор (YOLOv8)",
-        "priority": 2
-      },
-      "retinaface": {
-        "enabled": false,
-        "status": "not_installed",
-        "version": null,
-        "provider": "GPU",
-        "description": "RetinaFace детектор (Multi-scale)",
-        "priority": 2
-      }
-    },
-    "recognizers": {
-      "arcface": {
-        "enabled": true,
-        "status": "active",
-        "version": "buffalo_l",
-        "provider": "CUDA",
-        "description": "ArcFace алгоритм распознавания (buffalo_l)",
-        "priority": 1,
-        "gpu_required": true
-      },
-      "adaface": {
-        "enabled": false,
-        "status": "not_installed",
-        "version": null,
-        "provider": "CPU",
-        "description": "AdaFace адаптивное распознавание",
-        "priority": 3
-      }
-    },
-    "trackers": {
-      "bytetrack": {
-        "enabled": false,
-        "status": "not_installed",
-        "version": "1.0",
-        "provider": "CPU",
-        "description": "ByteTrack быстрый трекинг",
-        "priority": 4
-      },
-      "botsort": {
-        "enabled": false,
-        "status": "not_installed",
-        "version": "1.0",
-        "provider": "CPU",
-        "description": "BoT-SORT улучшенный трекинг",
-        "priority": 4
-      }
-    }
-  },
   "active": {
     "detector": "scrfd",
     "recognizer": "arcface",
     "tracker": "none"
+  },
+  "detectors": {
+    "scrfd": {
+      "enabled": true,
+      "status": "active",
+      "version": "10GF",
+      "provider": "CUDA",
+      "description": "SCRFD детектор от InsightFace (buffalo_l)",
+      "priority": 1,
+      "model_path": "models/buffalo_l/det_10g.onnx"
+    },
+    "yoloface": {
+      "enabled": false,
+      "status": "not_installed",
+      "version": null,
+      "provider": "GPU",
+      "description": "YOLO-Face детектор (YOLOv8)",
+      "priority": 2,
+      "model_path": null
+    },
+    "retinaface": {
+      "enabled": false,
+      "status": "not_installed",
+      "version": null,
+      "provider": "GPU",
+      "description": "RetinaFace детектор (Multi-scale)",
+      "priority": 2,
+      "model_path": null
+    }
+  },
+  "recognizers": {
+    "arcface": {
+      "enabled": true,
+      "status": "active",
+      "version": "buffalo_l",
+      "provider": "CUDA",
+      "description": "ArcFace алгоритм распознавания (buffalo_l)",
+      "priority": 1,
+      "model_path": "models/buffalo_l/w600k_r50.onnx",
+      "gpu_required": true
+    },
+    "adaface": {
+      "enabled": false,
+      "status": "not_installed",
+      "version": null,
+      "provider": "CPU",
+      "description": "AdaFace адаптивное распознавание",
+      "priority": 3,
+      "model_path": null
+    }
+  },
+  "trackers": {
+    "bytetrack": {
+      "enabled": false,
+      "status": "not_installed",
+      "version": "1.0",
+      "provider": "CPU",
+      "description": "ByteTrack быстрый трекинг",
+      "priority": 4
+    },
+    "botsort": {
+      "enabled": false,
+      "status": "not_installed",
+      "version": "1.0",
+      "provider": "CPU",
+      "description": "BoT-SORT улучшенный трекинг",
+      "priority": 4
+    }
   },
   "router": {
     "enabled": true,
