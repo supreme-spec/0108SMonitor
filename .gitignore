@@ -52,3 +52,7 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Calibration and test data
+calibration/out/
+test_dataset/
+

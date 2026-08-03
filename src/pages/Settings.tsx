@@ -1436,8 +1436,7 @@ export default function Settings() {
                 <th className="pb-2 font-semibold text-kraken-text">Действие</th>
               </tr>
             </thead>
-            <tbody className="space-y-2">
-          {/* CUDA */}
+            {/* CUDA */}
           <div className={`p-4 rounded-xl border ${health?.cuda_available ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
             <div className="flex items-start gap-3">
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.cuda_available ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
@@ -1610,6 +1609,7 @@ export default function Settings() {
               </div>
             </div>
           </div>
+        </table>
         </div>
 
         {/* Summary */}

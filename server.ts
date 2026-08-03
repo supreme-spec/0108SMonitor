@@ -798,6 +798,35 @@ app.delete(["/api/cameras/:id", "/api/cameras/:id/"], async (req, res) => {
   }
 });
 
+app.get("/api/cameras/:id/roi", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
+    const camera = await prisma.camera.findUnique({ where: { id } })
+    if (!camera) return res.status(404).json({ detail: "Camera not found" })
+    const zones = camera.roi_zones ? JSON.parse(camera.roi_zones) : []
+    res.json({ zones })
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/roi", method: "GET" })
+    res.status(500).json({ detail: "Internal server error" })
+  }
+})
+
+app.put("/api/cameras/:id/roi", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
+    const { zones } = req.body as { zones: any[] }
+    if (!Array.isArray(zones)) return res.status(400).json({ detail: "zones must be an array" })
+    const updated = await prisma.camera.update({
+      where: { id },
+      data: { roi_zones: JSON.stringify(zones) },
+    })
+    res.json({ success: true, zones })
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/roi", method: "PUT" })
+    res.status(500).json({ detail: "Internal server error" })
+  }
+})
+
 app.get("/api/cameras/:id/snapshot", (req, res) => {
   const id = parseInt(req.params.id);
   let imageBuffer: Buffer;

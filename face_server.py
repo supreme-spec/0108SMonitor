@@ -1104,7 +1104,7 @@ async def detect_faces(
         # Determine if faces_data is from AI Manager (list of dicts) or InsightFace (list of face objects)
         is_ai_manager_result = faces_data and isinstance(faces_data, list) and len(faces_data) > 0 and isinstance(faces_data[0], dict)
 
-        faces_list = faces_data if is_ai_manager_result else (faces if not is_ai_manager_result else [])
+        faces_list = faces_data
 
         for face in faces_list[:max_faces]:
             if is_ai_manager_result:
