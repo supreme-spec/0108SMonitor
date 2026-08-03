@@ -87,25 +87,6 @@ function sanitizeLayout(parsed: Layout, cw: number, ch: number): Layout {
   return parsed
 }
 
-function scaleLayout(parsed: Layout, fromW: number, fromH: number, toW: number, toH: number): Layout {
-  const sx = toW / fromW
-  const sy = toH / fromH
-  const ids: BlockId[] = ['video', 'person', 'people', 'events', 'guest']
-  const next = { ...parsed }
-  for (const id of ids) {
-    const block = next[id]
-    if (!block?.rect) continue
-    const r = block.rect
-    block.rect = {
-      x: Math.round(r.x * sx),
-      y: Math.round(r.y * sy),
-      w: Math.max(120, Math.round(r.w * sx)),
-      h: Math.max(80, Math.round(r.h * sy)),
-    }
-  }
-  return next
-}
-
 function loadLayout(cw: number, ch: number): Layout {
   const safeW = Math.max(cw, 400)
   const safeH = Math.max(ch, 300)
@@ -114,21 +95,14 @@ function loadLayout(cw: number, ch: number): Layout {
     if (s) {
       const parsed = JSON.parse(s) as Layout
       const ids: BlockId[] = ['video', 'person', 'people', 'events', 'guest']
-      if (ids.every(id => parsed[id]?.rect)) {
-        const scaled = scaleLayout(parsed, 1200, 700, safeW, safeH)
-        return sanitizeLayout(scaled, safeW, safeH)
-      }
+      if (ids.every(id => parsed[id]?.rect)) return sanitizeLayout(parsed, safeW, safeH)
     }
   } catch {}
   return defaultLayout(safeW, safeH)
 }
 
 function saveLayout(l: Layout) {
-  try {
-    const { w, h } = containerSizeRef.current
-    const scaled = scaleLayout(l, w, h, 1200, 700)
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify(scaled))
-  } catch {}
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(l)) } catch {}
 }
 
 // ── Draggable block ───────────────────────────────────────────────────────────
@@ -201,7 +175,6 @@ export default function LiveMonitor({
   recentEvents, onLatestFace, onNavigateEvents, onNavigatePeople,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const containerSizeRef = useRef({ w: 1200, h: 700 })
   const [containerSize, setContainerSize] = useState({ w: 1200, h: 700 })
   const [layout, setLayout] = useState<Layout>(() => defaultLayout(1200, 700))
   const [showMenu, setShowMenu] = useState(false)
@@ -237,9 +210,7 @@ export default function LiveMonitor({
       const w = el.clientWidth
       const h = el.clientHeight
       if (w < 50 || h < 50) return
-      const size = { w, h }
-      setContainerSize(size)
-      containerSizeRef.current = size
+      setContainerSize({ w, h })
       setLayout(loadLayout(w, h))
     }
     // Небольшая задержка чтобы контейнер успел отрендериться
@@ -822,7 +793,6 @@ export default function LiveMonitor({
             />
           </DraggableBlock>
         )}
-
       </div>
 
       {/* Modals */}

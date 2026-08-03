@@ -40,11 +40,59 @@ export default function TopBar({
   return (
     <div className="h-16 relative flex items-center bg-kraken-panel px-4 border-b border-kraken-border flex-shrink-0">
 
-      {/* Left: back + release button */}
+      {/* Left: back + camera selector + quick switcher + live */}
       <div className="flex items-center gap-3 flex-1">
         <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-text transition-colors">
           <ChevronLeft size={20} />
         </button>
+
+        {/* Camera dropdown */}
+        <div className="relative">
+          <select
+            value={selectedCameraId ?? ''}
+            onChange={e => onSelectCamera(Number(e.target.value))}
+            className="appearance-none bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-1.5 pr-8 rounded-lg focus:outline-none focus:border-kraken-purple cursor-pointer min-w-[140px]"
+          >
+            {cameras.length === 0 && <option value="">Нет камер</option>}
+            {cameras.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <ChevronDown size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-kraken-muted pointer-events-none" />
+        </div>
+
+        {/* Quick camera switcher buttons */}
+        {cameras.length > 0 && (
+          <div className="flex items-center gap-1 ml-1">
+            {cameras.slice(0, 3).map(camera => (
+              <button
+                key={camera.id}
+                onClick={() => onSelectCamera(camera.id)}
+                className={`px-2 py-1 text-xs rounded transition-colors ${
+                  selectedCameraId === camera.id
+                    ? 'bg-kraken-purple text-white'
+                    : 'bg-kraken-hover text-kraken-muted hover:text-kraken-text hover:bg-kraken-border'
+                }`}
+                title={camera.name}
+              >
+                {camera.name.length > 8 ? camera.name.substring(0, 6) + '...' : camera.name}
+              </button>
+            ))}
+            {cameras.length > 3 && (
+              <span className="text-kraken-disabled text-xs px-1">+{cameras.length - 3}</span>
+            )}
+          </div>
+        )}
+
+        {/* Live badge */}
+        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+          isOnline
+            ? 'bg-kraken-green/15 text-kraken-green'
+            : 'bg-kraken-hover text-kraken-disabled'
+        }`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-kraken-green animate-pulse' : 'bg-kraken-disabled'}`} />
+          {isOnline ? 'LIVE' : 'ОФЛАЙН'}
+        </div>
       </div>
 
       {/* Right: release button + bell + user */}

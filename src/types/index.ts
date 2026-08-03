@@ -72,19 +72,6 @@ export interface Camera {
   use_camera_analytics?: boolean
   brand?: string | null
   model_name?: string | null
-  // Stream profiles (опционально, заполняется авто/шаблоном/ручным)
-  main_codec?: string | null
-  main_res?: string | null
-  main_fps?: number | null
-  main_br?: number | null
-  main_gop?: number | null
-  main_src?: 'auto' | 'tmpl' | 'manual' | null
-  sub_codec?: string | null
-  sub_res?: string | null
-  sub_fps?: number | null
-  sub_br?: number | null
-  sub_gop?: number | null
-  sub_src?: 'auto' | 'tmpl' | 'manual' | null
 }
 
 export interface KrakenEvent {

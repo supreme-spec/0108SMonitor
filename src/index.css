@@ -21,20 +21,10 @@
   --color-kraken-gold: #F5C518;
   --color-kraken-gold-hover: #D4A800;
 
-  --color-kraken-accent: #E0A458;
-  --color-kraken-accent-hover: #ECB468;
-  --color-kraken-accent-dim: #B9823C;
-  --color-kraken-accent-bg: #241C10;
-  --color-kraken-accent-border: #3A4A5A;
-  --color-kraken-field: #0F161E;
-  --color-kraken-field-hover: #16202B;
-  --color-kraken-panel-alt: #141C25;
-
   --shadow-glow-purple: 0 0 20px rgba(123,97,255,0.15);
   --shadow-glow-green: 0 0 20px rgba(0,255,148,0.2);
   --shadow-glow-red: 0 0 20px rgba(255,59,59,0.3);
   --shadow-glow-orange: 0 0 20px rgba(255,140,0,0.35);
-  --shadow-glow-accent: 0 0 20px rgba(224,164,88,0.18);
 
   --animate-pulse-slow: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-fade-in: fadeIn 0.3s ease-in-out;
@@ -114,13 +104,13 @@ body {
 }
 
 .btn-primary {
-  @apply bg-kraken-accent hover:bg-kraken-accent-hover text-black px-4 py-2 rounded-lg transition-colors font-semibold;
+  @apply bg-kraken-purple hover:bg-kraken-purple-hover text-white px-4 py-2 rounded-lg transition-colors font-medium;
 }
 .btn-danger {
   @apply bg-kraken-red hover:bg-kraken-red-active text-white px-4 py-2 rounded-lg transition-colors font-medium;
 }
 .btn-ghost {
-  @apply border border-kraken-border text-kraken-muted hover:text-kraken-accent hover:border-kraken-accent px-4 py-2 rounded-lg transition-colors;
+  @apply border border-kraken-border text-kraken-muted hover:text-kraken-text hover:border-kraken-purple px-4 py-2 rounded-lg transition-colors;
 }
 
 .panel {
@@ -181,42 +171,4 @@ body {
 .kraken-req-value--rec {
   color: #3dd68c;
   font-weight: 600;
-}
-
-/* UI_v2: бейджи источника */
-.src-badge {
-  @apply text-[10px] font-bold px-2 py-0.5 rounded-md tracking-wide inline-flex items-center gap-1;
-}
-.src-badge--auto {
-  background-color: #11241A;
-  color: #5FB878;
-}
-.src-badge--tmpl {
-  background-color: #241C10;
-  color: #E0A458;
-}
-.src-badge--manual {
-  background-color: #161D24;
-  color: #7D8A98;
-}
-
-/* UI_v2: плитка */
-.ui2-tile {
-  @apply bg-kraken-panel-alt border border-kraken-accent-border rounded-2xl p-4;
-  box-shadow: var(--shadow-glow-accent);
-}
-.ui2-tile-header {
-  @apply flex items-center justify-between mb-3;
-}
-.ui2-tile-title {
-  @apply text-kraken-text text-sm font-bold tracking-wide;
-}
-.ui2-field {
-  @apply flex items-center gap-3 mb-2.5 last:mb-0;
-}
-.ui2-field-label {
-  @apply text-kraken-muted text-xs w-24 shrink-0;
-}
-.ui2-field-value {
-  @apply text-kraken-text text-xs font-mono flex-1;
 }

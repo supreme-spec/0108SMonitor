@@ -23,6 +23,20 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "venv", "UI_v2"]
+  "include": [
+    "src/**/*",
+    "server.ts",
+    "face-engine.ts",
+    "vite.config.ts",
+    "check_gpu.py",
+    "*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "venv",
+    "venv_kraken",
+    "venv_new",
+    "dist",
+    "prisma"
+  ]
 }

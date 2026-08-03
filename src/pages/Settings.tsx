@@ -1045,67 +1045,6 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Video Stream Templates */}
-      <div className="panel p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Camera size={18} className="text-kraken-accent" />
-          <span className="text-kraken-text font-semibold">Шаблоны видеопотоков</span>
-          <span className="text-kraken-muted text-xs ml-auto">Авто-расчёт параметров по модели камеры</span>
-        </div>
-        <p className="text-kraken-muted text-sm mb-4">
-          Выберите шаблон потока — система подставит рекомендованные codec, разрешение, FPS, битрейт и GOP.
-          Настройки можно редактировать вручную после автозаполнения.
-        </p>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-          {[
-            { id: 'hikvision-8mp', label: 'Hikvision 8MP', desc: 'H.265, 4K, 25 fps, 8Mbps', icon: '📷' },
-            { id: 'hikvision-4mp', label: 'Hikvision 4MP', desc: 'H.265, 2K, 25 fps, 4Mbps', icon: '📷' },
-            { id: 'unv-8mp', label: 'UNV 8MP', desc: 'H.265, 4K, 30 fps, 8Mbps', icon: '📷' },
-            { id: 'unv-2mp', label: 'UNV 2MP', desc: 'H.265, FHD, 25 fps, 3Mbps', icon: '📷' },
-            { id: 'dahua-4mp', label: 'Dahua 4MP', desc: 'H.265, 2K, 25 fps, 4Mbps', icon: '📷' },
-            { id: 'generic-h264', label: 'Generic RTSP', desc: 'H.264, FHD, 25 fps, 2Mbps', icon: '🌐' },
-          ].map((tpl) => (
-            <button
-              key={tpl.id}
-              onClick={() => {
-                alert(`Шаблон "${tpl.label}" выбран.\n\nНастройки:\n${tpl.desc}\n\nВ продакшене здесь будет автозаполнение полей потока.`)
-              }}
-              className="flex items-center gap-3 bg-kraken-field hover:bg-kraken-field-hover border border-kraken-border hover:border-kraken-accent rounded-xl px-4 py-3 text-left transition-colors"
-            >
-              <span className="text-xl">{tpl.icon}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-kraken-text text-sm font-semibold">{tpl.label}</div>
-                <div className="text-kraken-muted text-xs">{tpl.desc}</div>
-              </div>
-              <span className="text-kraken-accent text-xs">→</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="bg-kraken-base rounded-xl p-3">
-          <div className="text-kraken-muted text-xs mb-2">Рекомендуемые сочетания codec / разрешение</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-            {[
-              { codec: 'H.265', res: '3840×2160 (4K)', fps: '25–30', br: '6–10 Mbps', use: 'Архив, детекция лиц' },
-              { codec: 'H.265', res: '2560×1440 (2K)', fps: '25', br: '3–6 Mbps', use: 'Оптимальный баланс' },
-              { codec: 'H.265', res: '1920×1080 (FHD)', fps: '25', br: '2–4 Mbps', use: 'Мобильный/веб' },
-              { codec: 'H.264', res: '1920×1080 (FHD)', fps: '25', br: '2–4 Mbps', use: 'Совместимость со старым ПО' },
-              { codec: 'H.264', res: '1280×720 (HD)', fps: '30', br: '1–2 Mbps', use: 'Слабый канал/облако' },
-              { codec: 'MJPEG', res: '1920×1080', fps: '10–15', br: '8–20 Mbps', use: 'HTTP-потоки, низкая задержка' },
-            ].map((row, i) => (
-              <div key={i} className="flex items-center gap-2 bg-kraken-hover rounded-lg px-3 py-2">
-                <span className="text-kraken-text font-mono w-16">{row.codec}</span>
-                <span className="text-kraken-muted w-36">{row.res}</span>
-                <span className="text-kraken-disabled w-14">{row.fps}</span>
-                <span className="text-kraken-disabled w-20">{row.br}</span>
-                <span className="text-kraken-muted flex-1">{row.use}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
       {/* AI Models */}
       <div className="panel p-5">
         <div className="flex items-center gap-2 mb-4">
