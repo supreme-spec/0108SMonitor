@@ -42,7 +42,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import faiss
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -230,6 +230,11 @@ except Exception as e:
     logger.error(f"Startup initialization error: {e}")
     is_initialized = False
 
+# AI Manager instance - NOT initialized at startup to avoid event loop conflicts
+# Will be initialized on first request to /api/ai endpoints
+ai_manager = None
+ai_manager_initialized = False
+
 
 # ─── FAISS Helpers ────────────────────────────────────────────────────────────
 
@@ -414,6 +419,24 @@ def passes_quality_gate(face: Any) -> bool:
     return True
 
 
+def passes_quality_gate_from_dict(face_dict: Dict[str, Any]) -> bool:
+    """
+    Filters low-quality detections from AI Manager result (dict format).
+    """
+    score = float(face_dict.get("det_score", 0))
+    if score < MIN_DETECTION_SCORE:
+        logger.debug(f"Quality gate (dict): score {score:.3f} < {MIN_DETECTION_SCORE}")
+        return False
+
+    bbox = face_dict.get("bbox", [0, 0, 0, 0])
+    width = int(bbox[2] - bbox[0])
+    if width < MIN_FACE_SIZE:
+        logger.debug(f"Quality gate (dict): width {width} < {MIN_FACE_SIZE}")
+        return False
+
+    return True
+
+
 # ─── Quality Assessment (CV metrics) ──────────────────────────────────────────
 
 def _crop_face_region(img: np.ndarray, bbox: np.ndarray, pad_ratio: float = 0.2) -> Optional[np.ndarray]:
@@ -555,6 +578,46 @@ def compute_face_quality(face: Any, img: Optional[np.ndarray], face_count: int =
     # Итоговый score — жёсткое пересечение (min) суб-скоров: один провал =
     # низкое качество. Яркость/резкость масштабируются, чтобы «нормальный»
     # кадр давал ~0.8-0.95, а мусорный — < 0.3.
+    score = round(min(sharp_n, 0.4 + 0.6 * bright_n, pose_n), 4)
+
+    return {
+        "sharpness": round(sharp, 2),
+        "sharpness_score": round(sharp_n, 4),
+        "brightness": round(bright, 2),
+        "brightness_score": round(bright_n, 4),
+        "approx_lux": round(bright * BRIGHTNESS_TO_LUX, 1),
+        "pitch": pose["pitch"] if pose else None,
+        "yaw": pose["yaw"] if pose else None,
+        "roll": pose["roll"] if pose else None,
+        "face_count": int(face_count),
+        "score": score,
+    }
+
+
+def compute_face_quality_from_dict(face_dict: Dict[str, Any], img: Optional[np.ndarray], face_count: int = 1) -> Dict[str, Any]:
+    """
+    Считает комплексные метрики качества для одного лица из dict (AI Manager формат).
+    Использует bbox из dict и landmarks для оценки позы.
+    """
+    bbox = face_dict.get("bbox", [0, 0, 0, 0])
+    crop = _crop_face_region(img, np.array(bbox)) if img is not None else None
+    
+    sharp = estimate_sharpness(crop)
+    bright = estimate_brightness(crop)
+    
+    # Try to get keypoints from dict
+    kps = face_dict.get("kps")
+    pose = estimate_head_pose(np.array(kps) if kps else None, img.shape) if img is not None else None
+
+    sharp_n = _norm_sharpness(sharp)
+    bright_n = _norm_brightness(bright)
+    if pose is not None:
+        max_angle = max(abs(pose["pitch"]), abs(pose["yaw"]), abs(pose["roll"]))
+        pose_n = max(0.0, 1.0 - max_angle / 90.0)
+    else:
+        pose_n = 0.5
+
+    # Итоговый score — жёсткое пересечение (min) суб-скоров
     score = round(min(sharp_n, 0.4 + 0.6 * bright_n, pose_n), 4)
 
     return {
@@ -811,24 +874,36 @@ async def get_health() -> Dict[str, Any]:
 
 
 @app.post("/api/ai/set_detector")
-async def set_detector(detector: str = "scrfd"):
+async def set_detector(request: Request):
     """
     Переключить активный детектор
     
     Parameters:
-        detector: Имя детектора (scrfd, yoloface, retinaface)
+        detector: Имя детектора в body (scrfd, yoloface, retinaface)
     """
+    global ai_manager_initialized, ai_manager
+    
     try:
-        # Импортируем AIManager
-        sys.path.insert(0, str(Path(__file__).parent))
-        from backend.ai.manager.ai_manager import AIManager
+        body = await request.json()
+        detector = body.get("detector", "scrfd")
         
-        # Создаем менеджер и переключаем детектор
-        manager = AIManager()
-        result = manager.switch_detector(detector)
+        logger.info(f"set_detector called with: {detector}")
+        
+        # Import and initialize AIManager if not already done
+        if not ai_manager_initialized:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from backend.ai.manager.ai_manager import AIManager
+            ai_manager = AIManager.get_instance()
+            ai_manager_initialized = True
+            logger.info("AI Manager initialized on first request")
+        
+        # Use singleton instance for switching detector
+        result = await ai_manager.switch_detector_async(detector)
+        
+        logger.info(f"set_detector result: {result}")
         
         return {
-            "success": True,
+            "success": result.get('success', False),
             "detector": detector,
             "status": result.get('status', 'active'),
             "message": f"Детектор переключен на {detector}"
@@ -836,29 +911,41 @@ async def set_detector(detector: str = "scrfd"):
     except Exception as e:
         import traceback
         logger.error(f"Failed to switch detector: {e}")
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to switch detector: {str(e)}")
 
 
 @app.post("/api/ai/set_recognizer")
-async def set_recognizer(recognizer: str = "arcface"):
+async def set_recognizer(request: Request):
     """
     Переключить активный рекогнайзер
     
     Parameters:
-        recognizer: Имя рекогнайзера (arcface, adaface)
+        recognizer: Имя рекогнайзера в body (arcface, adaface)
     """
+    global ai_manager_initialized, ai_manager
+    
     try:
-        # Импортируем AIManager
-        sys.path.insert(0, str(Path(__file__).parent))
-        from backend.ai.manager.ai_manager import AIManager
+        body = await request.json()
+        recognizer = body.get("recognizer", "arcface")
         
-        # Создаем менеджер и переключаем рекогнайзер
-        manager = AIManager()
-        result = manager.switch_recognizer(recognizer)
+        logger.info(f"set_recognizer called with: {recognizer}")
+        
+        # Import and initialize AIManager if not already done
+        if not ai_manager_initialized:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from backend.ai.manager.ai_manager import AIManager
+            ai_manager = AIManager.get_instance()
+            ai_manager_initialized = True
+            logger.info("AI Manager initialized on first request")
+        
+        # Use singleton instance for switching recognizer
+        result = await ai_manager.switch_recognizer_async(recognizer)
+        
+        logger.info(f"set_recognizer result: {result}")
         
         return {
-            "success": True,
+            "success": result.get('success', False),
             "recognizer": recognizer,
             "status": result.get('status', 'active'),
             "message": f"Рекогнайзер переключен на {recognizer}"
@@ -871,24 +958,36 @@ async def set_recognizer(recognizer: str = "arcface"):
 
 
 @app.post("/api/ai/set_tracker")
-async def set_tracker(tracker: str = "none"):
+async def set_tracker(request: Request):
     """
     Переключить активный трекер
     
     Parameters:
-        tracker: Имя трекера (bytetrack, botsort, none)
+        tracker: Имя трекера в body (bytetrack, botsort, none)
     """
+    global ai_manager_initialized, ai_manager
+    
     try:
-        # Импортируем AIManager
-        sys.path.insert(0, str(Path(__file__).parent))
-        from backend.ai.manager.ai_manager import AIManager
+        body = await request.json()
+        tracker = body.get("tracker", "none")
         
-        # Создаем менеджер и переключаем трекер
-        manager = AIManager()
-        result = manager.switch_tracker(tracker)
+        logger.info(f"set_tracker called with: {tracker}")
+        
+        # Import and initialize AIManager if not already done
+        if not ai_manager_initialized:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from backend.ai.manager.ai_manager import AIManager
+            ai_manager = AIManager.get_instance()
+            ai_manager_initialized = True
+            logger.info("AI Manager initialized on first request")
+        
+        # Use singleton instance for switching tracker
+        result = await ai_manager.switch_tracker_async(tracker)
+        
+        logger.info(f"set_tracker result: {result}")
         
         return {
-            "success": True,
+            "success": result.get('success', False),
             "tracker": tracker,
             "status": result.get('status', 'active'),
             "message": f"Трекер переключен на {tracker}"
@@ -908,16 +1007,55 @@ async def get_ai_status():
     Returns:
         Статус активных модулей и их версий
     """
+    global ai_manager_initialized, ai_manager
+    
     try:
-        # Импортируем AIManager
-        sys.path.insert(0, str(Path(__file__).parent))
-        from backend.ai.manager.ai_manager import AIManager
+        # Import and initialize AIManager if not already done
+        if not ai_manager_initialized:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from backend.ai.manager.ai_manager import AIManager
+            ai_manager = AIManager.get_instance()
+            ai_manager_initialized = True
+            logger.info("AI Manager initialized on first request")
         
-        # Создаем менеджер и получаем статус
-        manager = AIManager()
-        status = manager.get_status()
+        # Get status from singleton instance
+        status = ai_manager.get_status()
         
-        return status
+        # Add simple status fields for quick diagnostics
+        active = status.get('active', {})
+        
+        # Get GPU info from face_server
+        import subprocess
+        cuda_available = False
+        cuda_version = None
+        try:
+            result_cuda = subprocess.run(
+                ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result_cuda.returncode == 0:
+                cuda_version = result_cuda.stdout.strip()
+                cuda_available = True
+        except Exception:
+            pass
+        
+        # Determine provider from used_provider
+        gpu = "none"
+        if cuda_available:
+            gpu = "cuda"
+        elif used_provider == "CPUExecutionProvider":
+            gpu = "cpu"
+        else:
+            gpu = used_provider.lower()
+        
+        return {
+            "detector": active.get("detector", "none"),
+            "recognizer": active.get("recognizer", "none"),
+            "tracker": active.get("tracker", "none"),
+            "gpu": gpu,
+            "loaded": ai_manager_initialized,
+            "full_status": status
+        }
     except Exception as e:
         import traceback
         logger.error(f"Failed to get AI status: {e}")
@@ -938,51 +1076,99 @@ async def detect_faces(
         image_bytes = await image.read()
         img = load_image_from_bytes(image_bytes)
 
-        if not is_initialized or face_app is None:
-            return {"faces": []}
-
         if img is None or img.size == 0:
             raise HTTPException(status_code=400, detail="Empty or invalid image")
 
-        threshold = min_confidence if min_confidence is not None else MIN_DETECTION_SCORE
-        try:
-            faces = face_app.get(img)
-        except Exception as face_err:
-            logger.error(f"face_app.get() crashed in detect-faces: {face_err}, img shape={img.shape}, dtype={img.dtype}")
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
+        # Try AI Manager first
+        faces_data = None
+        if ai_manager_initialized and ai_manager:
+            try:
+                faces_data = await ai_manager.detect(image_bytes)
+            except Exception as ai_err:
+                logger.warning(f"AI Manager detect failed, falling back to face_app: {ai_err}")
+
+        # Fallback to original face_app
+        if not faces_data:
+            if not is_initialized or face_app is None:
+                return {"faces": []}
+            try:
+                faces_data = face_app.get(img)
+            except Exception as face_err:
+                logger.error(f"face_app.get() crashed in detect-faces: {face_err}, img shape={img.shape}, dtype={img.dtype}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
+
         results: List[Dict[str, Any]] = []
 
-        for face in faces[:max_faces]:
-            if not passes_quality_gate(face):
-                continue
+        # Determine if faces_data is from AI Manager (list of dicts) or InsightFace (list of face objects)
+        is_ai_manager_result = faces_data and isinstance(faces_data, list) and len(faces_data) > 0 and isinstance(faces_data[0], dict)
 
-            box = face.bbox.astype(int).tolist()
-            detection: Dict[str, Any] = {
-                "box": {
-                    "x": box[0],
-                    "y": box[1],
-                    "width": box[2] - box[0],
-                    "height": box[3] - box[1],
-                },
-                "score": float(face.det_score),
-                "gender": int(face.gender) if hasattr(face, "gender") and face.gender is not None else None,
-                "gender_str": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
-                "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
-            }
-            if with_descriptors and hasattr(face, "embedding") and face.embedding is not None:
-                detection["descriptor"] = face.embedding.tolist()
-            if with_quality:
-                quality = compute_face_quality(face, img, len(faces))
-                detection["quality"] = quality
-                detection["pose"] = {
-                    "pitch": quality["pitch"],
-                    "yaw": quality["yaw"],
-                    "roll": quality["roll"],
+        faces_list = faces_data if is_ai_manager_result else (faces if not is_ai_manager_result else [])
+
+        for face in faces_list[:max_faces]:
+            if is_ai_manager_result:
+                # AI Manager format: dict with bbox, det_score, etc.
+                if not passes_quality_gate_from_dict(face):
+                    continue
+
+                bbox = face.get("bbox", [0, 0, 0, 0])
+                box = [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])]
+                detection: Dict[str, Any] = {
+                    "box": {
+                        "x": box[0],
+                        "y": box[1],
+                        "width": box[2] - box[0],
+                        "height": box[3] - box[1],
+                    },
+                    "score": float(face.get("det_score", 0)),
+                    "gender": int(face.get("gender")) if face.get("gender") is not None else None,
+                    "gender_str": ("male" if face.get("gender") == 0 else "female") if face.get("gender") is not None else None,
+                    "age": int(face.get("age")) if face.get("age") is not None else None,
                 }
-                detection["enrollment_issues"] = enrollment_issues(quality)
-                detection["enrollment_ok"] = len(detection["enrollment_issues"]) == 0
+                if with_descriptors and face.get("embedding"):
+                    detection["descriptor"] = face["embedding"]
+                if with_quality:
+                    # For AI Manager results, compute quality using raw image
+                    quality = compute_face_quality_from_dict(face, img, len(faces_list))
+                    detection["quality"] = quality
+                    detection["pose"] = {
+                        "pitch": quality["pitch"],
+                        "yaw": quality["yaw"],
+                        "roll": quality["roll"],
+                    }
+                    detection["enrollment_issues"] = enrollment_issues(quality)
+                    detection["enrollment_ok"] = len(detection["enrollment_issues"]) == 0
+            else:
+                # InsightFace format: face object
+                if not passes_quality_gate(face):
+                    continue
+
+                box = face.bbox.astype(int).tolist()
+                detection: Dict[str, Any] = {
+                    "box": {
+                        "x": box[0],
+                        "y": box[1],
+                        "width": box[2] - box[0],
+                        "height": box[3] - box[1],
+                    },
+                    "score": float(face.det_score),
+                    "gender": int(face.gender) if hasattr(face, "gender") and face.gender is not None else None,
+                    "gender_str": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
+                    "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
+                }
+                if with_descriptors and hasattr(face, "embedding") and face.embedding is not None:
+                    detection["descriptor"] = face.embedding.tolist()
+                if with_quality:
+                    quality = compute_face_quality(face, img, len(faces_list))
+                    detection["quality"] = quality
+                    detection["pose"] = {
+                        "pitch": quality["pitch"],
+                        "yaw": quality["yaw"],
+                        "roll": quality["roll"],
+                    }
+                    detection["enrollment_issues"] = enrollment_issues(quality)
+                    detection["enrollment_ok"] = len(detection["enrollment_issues"]) == 0
             results.append(detection)
 
         return {"faces": results}
@@ -1009,38 +1195,69 @@ async def assess_quality(image: UploadFile = File(...)):
         if img is None or img.size == 0:
             raise HTTPException(status_code=400, detail="Empty or invalid image")
 
-        if not is_initialized or face_app is None:
-            return {
-                "face_detected": False,
-                "face_count": 0,
-                "quality": 0.0,
-                "issues": ["Сервис распознавания лиц недоступен"],
-                "faces": [],
-            }
+        # Try AI Manager first
+        faces_data = None
+        if ai_manager_initialized and ai_manager:
+            try:
+                faces_data = await ai_manager.detect(image_bytes)
+            except Exception as ai_err:
+                logger.warning(f"AI Manager detect failed, falling back to face_app: {ai_err}")
 
-        try:
-            faces = face_app.get(img)
-        except Exception as face_err:
-            logger.error(f"face_app.get() crashed in assess-quality: {face_err}, img shape={img.shape}, dtype={img.dtype}")
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
-        face_count = len(faces)
-        valid_faces = [f for f in faces if passes_quality_gate(f)]
+        # Fallback to original face_app
+        if not faces_data:
+            if not is_initialized or face_app is None:
+                return {
+                    "face_detected": False,
+                    "face_count": 0,
+                    "quality": 0.0,
+                    "issues": ["Сервис распознавания лиц недоступен"],
+                    "faces": [],
+                }
+            try:
+                faces_data = face_app.get(img)
+            except Exception as face_err:
+                logger.error(f"face_app.get() crashed in assess-quality: {face_err}, img shape={img.shape}, dtype={img.dtype}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
+
+        face_count = len(faces_data)
+        
+        # Determine if faces_data is from AI Manager (list of dicts) or InsightFace (list of face objects)
+        is_ai_manager_result = faces_data and isinstance(faces_data, list) and len(faces_data) > 0 and isinstance(faces_data[0], dict)
+        
+        if is_ai_manager_result:
+            valid_faces = [f for f in faces_data if passes_quality_gate_from_dict(f)]
+        else:
+            valid_faces = [f for f in faces_data if passes_quality_gate(f)]
 
         face_payloads: List[Dict[str, Any]] = []
         for face in valid_faces:
-            quality = compute_face_quality(face, img, face_count)
-            box = face.bbox.astype(int).tolist()
-            face_payloads.append({
-                "box": {"x": box[0], "y": box[1], "width": box[2] - box[0], "height": box[3] - box[1]},
-                "score": float(face.det_score),
-                "gender": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
-                "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
-                "quality": quality,
-                "pose": {"pitch": quality["pitch"], "yaw": quality["yaw"], "roll": quality["roll"]},
-                "enrollment_issues": enrollment_issues(quality),
-            })
+            if is_ai_manager_result:
+                quality = compute_face_quality_from_dict(face, img, face_count)
+                bbox = face.get("bbox", [0, 0, 0, 0])
+                box = [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])]
+                face_payloads.append({
+                    "box": {"x": box[0], "y": box[1], "width": box[2] - box[0], "height": box[3] - box[1]},
+                    "score": float(face.get("det_score", 0)),
+                    "gender": ("male" if face.get("gender") == 0 else "female") if face.get("gender") is not None else None,
+                    "age": int(face.get("age")) if face.get("age") is not None else None,
+                    "quality": quality,
+                    "pose": {"pitch": quality["pitch"], "yaw": quality["yaw"], "roll": quality["roll"]},
+                    "enrollment_issues": enrollment_issues(quality),
+                })
+            else:
+                quality = compute_face_quality(face, img, face_count)
+                box = face.bbox.astype(int).tolist()
+                face_payloads.append({
+                    "box": {"x": box[0], "y": box[1], "width": box[2] - box[0], "height": box[3] - box[1]},
+                    "score": float(face.det_score),
+                    "gender": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
+                    "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
+                    "quality": quality,
+                    "pose": {"pitch": quality["pitch"], "yaw": quality["yaw"], "roll": quality["roll"]},
+                    "enrollment_issues": enrollment_issues(quality),
+                })
 
         if not valid_faces:
             return {
@@ -1052,8 +1269,12 @@ async def assess_quality(image: UploadFile = File(...)):
             }
 
         # Первичное лицо = крупнейшее по площади бокса среди валидных.
-        primary = max(valid_faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-        primary_quality = compute_face_quality(primary, img, face_count)
+        if is_ai_manager_result:
+            primary = max(valid_faces, key=lambda f: (f.get("bbox", [0,0,0,0])[2] - f.get("bbox", [0,0,0,0])[0]) * (f.get("bbox", [0,0,0,0])[3] - f.get("bbox", [0,0,0,0])[1]))
+            primary_quality = compute_face_quality_from_dict(primary, img, face_count)
+        else:
+            primary = max(valid_faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+            primary_quality = compute_face_quality(primary, img, face_count)
         issues = enrollment_issues(primary_quality)
         if face_count > ENROLL_MAX_FACES:
             issues.append("Обнаружено несколько лиц в кадре")
@@ -1065,10 +1286,10 @@ async def assess_quality(image: UploadFile = File(...)):
             "issues": issues,
             "enrollment_ok": len(issues) == 0,
             "primary": {
-                "score": float(primary.det_score),
+                "score": float(primary.get("det_score", primary.det_score if not is_ai_manager_result else 0)),
                 "quality": primary_quality,
-                "gender": ("male" if getattr(primary, "gender", None) == 0 else "female") if hasattr(primary, "gender") and primary.gender is not None else None,
-                "age": int(primary.age) if hasattr(primary, "age") and primary.age is not None else None,
+                "gender": ("male" if primary.get("gender") == 0 else "female") if primary.get("gender") is not None else (primary.gender if not is_ai_manager_result else None),
+                "age": int(primary.get("age")) if primary.get("age") is not None else (primary.age if not is_ai_manager_result else None),
             },
             "faces": face_payloads,
         }

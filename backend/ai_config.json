@@ -1,0 +1,19 @@
+{
+  "active": {
+    "detector": "scrfd",
+    "recognizer": "arcface",
+    "tracker": "none"
+  },
+  "detectors": {
+    "scrfd": {
+      "enabled": true,
+      "status": "active"
+    }
+  },
+  "recognizers": {
+    "arcface": {
+      "enabled": true
+    }
+  },
+  "trackers": {}
+}

@@ -2,7 +2,10 @@
 YOLO-Face - детектор на основе YOLO
 """
 
-from .base import BaseDetector, DetectedFace
+import sys
+from pathlib import Path
+
+from .base import BaseDetector, DetectedFace, ModuleStatus
 
 
 class YOLOFace(BaseDetector):
@@ -18,6 +21,14 @@ class YOLOFace(BaseDetector):
         self.info.provider = "GPU"
         self.info.description = "YOLO-Face детектор (YOLOv8)"
         self.info.status = ModuleStatus.NOT_INSTALLED
+
+    async def load_models(self) -> bool:
+        """Загрузить модели детектора"""
+        return await self.initialize()
+
+    async def unload_models(self) -> bool:
+        """Выгрузить модели детектора"""
+        return await super().unload_models()
 
     async def detect(self, image_bytes: bytes) -> list:
         """Детектировать лица на изображении"""

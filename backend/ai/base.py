@@ -21,7 +21,9 @@ class ModuleStatus(Enum):
     NOT_INSTALLED = "not_installed"
     INSTALLING = "installing"
     INSTALLED = "installed"
+    LOADED = "loaded"
     ACTIVE = "active"
+    UNLOADED = "unloaded"
     ERROR = "error"
 
 

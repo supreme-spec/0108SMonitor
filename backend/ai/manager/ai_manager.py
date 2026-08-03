@@ -7,6 +7,8 @@ AIManager - Единая точка входа для AI операций
 
 import os
 import json
+import logging
+import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -31,8 +33,28 @@ class AIManager:
     """
 
     CONFIG_PATH = Path(__file__).parent.parent.parent / "ai_config.json"
-
+    _instance = None
+    
+    @staticmethod
+    def get_instance() -> 'AIManager':
+        """Get singleton instance."""
+        return AIManager()
+    
+    def __new__(cls, config: dict = None):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self, config: dict = None):
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"AIManager.__init__ called, self._initialized={getattr(self, '_initialized', 'N/A')}")
+        
+        if self._initialized:
+            logger.info("AIManager already initialized, skipping")
+            return
         self.config = config or {}
         self._config_data = self._load_config()
         
@@ -61,6 +83,8 @@ class AIManager:
             'bytetrack': ByteTrack,
             'botsort': ByteTrack,  # BoT-SORT пока использует ту же реализацию
         }
+        
+        self._initialized = True
 
     def _load_config(self) -> dict:
         """Загрузить конфигурацию из ai_config.json"""
@@ -107,6 +131,11 @@ class AIManager:
 
     async def _load_detector(self, name: str) -> bool:
         """Загрузить детектор по имени"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"_load_detector called: {name}")
+        
         try:
             if name == 'none':
                 self._active_detector = None
@@ -115,15 +144,23 @@ class AIManager:
             
             if name not in self._detector_classes:
                 print(f"Unknown detector: {name}")
+                logger.error(f"Unknown detector: {name}")
                 return False
+            
+            logger.info(f"Unloading old detector: {self._active_detector}")
             
             # Выгружаем старый модуль
             if self._active_detector:
                 await self._active_detector.unload_models()
             
+            logger.info(f"Creating new detector instance: {name}")
+            
             # Создаем новый экземпляр
             detector_class = self._detector_classes[name]
             self._active_detector = detector_class()
+            
+            logger.info(f"Initializing detector: {name}")
+            
             await self._active_detector.initialize()
             
             # Обновляем router
@@ -136,11 +173,14 @@ class AIManager:
             
             self._save_config()
             
-            print(f"Loaded detector: {name}")
+            logger.info(f"Loaded detector: {name}")
             return True
             
         except Exception as e:
             print(f"Failed to load detector {name}: {e}")
+            import traceback as tb
+            logger.error(f"Failed to load detector {name}: {e}")
+            logger.error(tb.format_exc())
             return False
 
     async def _load_recognizer(self, name: str) -> bool:
@@ -294,9 +334,9 @@ class AIManager:
             
         return await self._active_tracker.track(frames)
 
-    def switch_detector(self, name: str) -> dict:
+    async def switch_detector_async(self, name: str) -> dict:
         """
-        Переключить активный детектор
+        Асинхронная версия переключения детектора (для использования внутри FastAPI)
         
         Args:
             name: Имя детектора (scrfd, yoloface, retinaface)
@@ -304,8 +344,14 @@ class AIManager:
         Returns:
             Статус операции
         """
-        import asyncio
-        success = asyncio.get_event_loop().run_until_complete(self._load_detector(name))
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"Starting switch_detector_async: {name}")
+        
+        success = await self._load_detector(name)
+        
+        logger.info(f"switch_detector_async result: {success}, name: {name}")
         
         return {
             'success': success,
@@ -313,9 +359,9 @@ class AIManager:
             'status': 'active' if success else 'error'
         }
 
-    def switch_recognizer(self, name: str) -> dict:
+    async def switch_recognizer_async(self, name: str) -> dict:
         """
-        Переключить активный рекогнайзер
+        Асинхронная версия переключения рекогнайзера
         
         Args:
             name: Имя рекогнайзера (arcface, adaface)
@@ -323,8 +369,7 @@ class AIManager:
         Returns:
             Статус операции
         """
-        import asyncio
-        success = asyncio.get_event_loop().run_until_complete(self._load_recognizer(name))
+        success = await self._load_recognizer(name)
         
         return {
             'success': success,
@@ -332,9 +377,9 @@ class AIManager:
             'status': 'active' if success else 'error'
         }
 
-    def switch_tracker(self, name: str) -> dict:
+    async def switch_tracker_async(self, name: str) -> dict:
         """
-        Переключить активный трекер
+        Асинхронная версия переключения трекера
         
         Args:
             name: Имя трекера (bytetrack, botsort)
@@ -342,8 +387,7 @@ class AIManager:
         Returns:
             Статус операции
         """
-        import asyncio
-        success = asyncio.get_event_loop().run_until_complete(self._load_tracker(name))
+        success = await self._load_tracker(name)
         
         return {
             'success': success,
