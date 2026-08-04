@@ -58,6 +58,7 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
   const [loading, setLoading] = useState(true)
   const [cameraLoading, setCameraLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [cameraWarning, setCameraWarning] = useState('')
   const [error, setError] = useState('')
   const [newLabel, setNewLabel] = useState('Зона 1')
   const [confirmState, setConfirmState] = useState<{
@@ -86,7 +87,7 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
         } else if (!cam.is_active) {
           setError('Камера отключена. Включите камеру в настройках перед настройкой зон.')
         } else if (cam.status && cam.status !== 'online') {
-          setError(`Камера недоступна: ${cam.status.replace('error:', '')}. FFmpeg не может подключиться к потоку.`)
+          setCameraWarning(`Камера недоступна: ${cam.status.replace('error:', '')}. FFmpeg не может подключиться к потоку.`)
         }
       } catch {
         setError('Не удалось загрузить информацию о камере')
@@ -403,6 +404,11 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
             </div>
           ) : (
           <>
+            {cameraWarning && (
+              <div className="mb-3 px-3 py-2 rounded-lg border border-kraken-orange/40 bg-kraken-orange/10 text-kraken-orange text-xs">
+                {cameraWarning}
+              </div>
+            )}
           {loading && (
             <div className="flex items-center justify-center h-48 text-kraken-muted gap-2">
               <RefreshCw size={16} className="animate-spin" />
