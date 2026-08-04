@@ -1938,6 +1938,53 @@ app.post(["/api/persons/:id/photos/:photoId/set_primary", "/api/persons/:id/phot
   }
 });
 
+// ── GUESTS API ────────────────────────────────────────────────────────────
+
+app.get(["/api/guests", "/api/guests/"], async (req, res) => {
+  try {
+    const guests = await prisma.guest.findMany({
+      where: { is_active: true },
+      orderBy: { created_at: "desc" },
+      take: 100,
+    });
+    res.json(guests);
+  } catch (err) {
+    logError(err as Error, { context: "get-guests" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.get(["/api/guests/:id", "/api/guests/:id/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const guest = await prisma.guest.findUnique({ where: { id } });
+    if (!guest) return res.status(404).json({ detail: "Guest not found" });
+    res.json(guest);
+  } catch (err) {
+    logError(err as Error, { context: "get-guest" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post(["/api/guests/:id/photos", "/api/guests/:id/photos/"], upload.any(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const guest = await prisma.guest.findUnique({ where: { id } });
+    if (!guest) return res.status(404).json({ detail: "Guest not found" });
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) return res.status(400).json({ detail: "No file uploaded" });
+    const file = files[0];
+    const filename = `guest_${id}_${Date.now()}_${file.originalname}`;
+    const destPath = path.join(photosDir, filename);
+    await fs.promises.copyFile(file.path, destPath);
+    await prisma.guest.update({ where: { id }, data: { photo_path: `photos/${filename}` } });
+    res.json({ success: true, photo_path: `photos/${filename}` });
+  } catch (err) {
+    logError(err as Error, { context: "upload-guest-photo" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
 // ── FAILED EMBEDDINGS ──
 // Коллектор «мусорных» кадров, отклонённых воротами качества при ЗАПИСИ
 // референсного эмбеддинга (размытие / наклон головы / темнота / несколько лиц).
@@ -3486,142 +3533,81 @@ async function cropFaceFromFrame(frameBase64: string, box: any): Promise<Buffer 
  * создаёт персону, регистрирует эмбеддинг. Если лицо уже есть в базе —
  * просто привязывает событие к существующей персоне (дедуп).
  */
-async function createUnknownPersonFromFace(
+async function createUnknownGuestFromFace(
   cam: any,
   frameBase64: string,
   face: any
 ): Promise<{ id: number; name: string; category: string } | null> {
-  // Используем дескриптор, УЖЕ вычисленный детектором (face.descriptor) — он надёжен.
-  // Повторное вырезание лица + re-детект (старый код) проваливался на quality gate
-  // Python-сервера ("Лицо не обнаружено на фото"), поэтому эмбеддинг не сохранялся
-  // и персона была неопознаваемой → плодились дубликаты "Неизвестный".
-  const descriptorArr: number[] | null =
-    face?.descriptor && Array.isArray(face.descriptor) && face.descriptor.length
-      ? (face.descriptor as number[])
-      : null;
-
-  // Дедуп: не плодим дубликаты одного и того же лица (по уже готовому дескриптору)
-  if (descriptorArr && descriptorArr.length) {
-    try {
-      const existing = await searchByDescriptor(new Float32Array(descriptorArr), recognition_threshold_pct / 100, 1);
-      if (existing.length && existing[0].personId) {
-        const pid = existing[0].personId as number;
-        await prisma.person
-          .update({ where: { id: pid }, data: { visit_count: { increment: 1 }, last_seen_at: new Date() } })
-          .catch(() => {});
-        const p = persons.find((x: any) => x.id === pid);
-        return { id: pid, name: existing[0].personName, category: existing[0].category || (p?.category ?? "CLIENT") };
-      }
-    } catch (e) {
-      logDebug(`Дедуп неизвестного не удался: ${(e as Error).message}`);
-    }
-  }
-
-  // Сохраняем снимок лица для истории (обрезка по боксу, fallback — весь кадр)
   let photoBuffer: Buffer | null = face?.box ? await cropFaceFromFrame(frameBase64, face.box) : null;
   if (!photoBuffer) photoBuffer = Buffer.from(frameBase64, "base64");
   const filename = `unknown_${cam.id}_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
   const fullPath = path.join(photosDir, filename);
-  // Асинхронная запись: функция вызывается из тика детекции (setInterval 500ms),
-  // синхронный writeFileSync блокировал бы event loop (разбор кадров и WS-рассылку).
   await fs.promises.writeFile(fullPath, photoBuffer);
   const photo_path = `photos/${filename}`;
 
-  const newPerson = await prisma.person.create({
+  const newGuest = await prisma.guest.create({
     data: {
       name: "Неизвестный",
-      category: "CLIENT",
+      photo_path,
       is_active: true,
       visit_count: 1,
-      embedding_count: 0,
+      confidence: face?.score || 0.5,
+      camera_id: cam.id,
+      camera_name: cam.name,
     },
   });
 
-  let hasEmbedding = false;
-  if (descriptorArr && descriptorArr.length) {
-    // Основной путь: регистрируем по уже вычисленному дескриптору
-    const reg = await registerPersonFromDescriptor(newPerson.id, "Неизвестный", "CLIENT", photo_path, descriptorArr);
-    hasEmbedding = reg.hasEmbedding;
-  } else {
-    // Fallback: пытаемся извлечь из обрезанного кадра (может не сработать на мелких лицах)
-    const reg = await registerFacePerson(newPerson.id, "Неизвестный", "CLIENT", photo_path, fullPath);
-    hasEmbedding = reg.hasEmbedding;
-  }
-
-  await prisma.personPhoto.create({
-    data: { person_id: newPerson.id, photo_path, is_primary: true, has_embedding: hasEmbedding },
+  await prisma.guest.update({
+    where: { id: newGuest.id },
+    data: { photo_path },
   });
 
-  await prisma.person.update({
-    where: { id: newPerson.id },
-    data: { photo_path, embedding_count: hasEmbedding ? 1 : 0 },
-  });
-
-  const created = await prisma.person.findUnique({ where: { id: newPerson.id }, include: { photos: true } });
-  if (created) persons.unshift({ ...created });
-
-  if (!hasEmbedding) {
-    // Без эмбеддинга персона бесполезна для распознавания и только засоряет БД → удаляем.
-    logWarn(`Не удалось получить эмбеддинг для неизвестного (ID ${newPerson.id}) — персона не создаётся`);
-    try {
-      await prisma.personPhoto.deleteMany({ where: { person_id: newPerson.id } });
-      await prisma.person.delete({ where: { id: newPerson.id } });
-      persons = persons.filter((x: any) => x.id !== newPerson.id);
-      if (fs.existsSync(fullPath)) await fs.promises.unlink(fullPath);
-    } catch (e) {
-      logError(e as Error, { context: "cleanup broken unknown person", personId: newPerson.id });
-    }
-    return null;
-  }
-
-  return { id: newPerson.id, name: "Неизвестный", category: "CLIENT" };
+  return { id: newGuest.id, name: "Неизвестный", category: "GUEST" };
 }
 
 async function handleUnknownEvent(cam: any, frameBase64: string, face?: any) {
-  const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id);
+   const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id);
 
-  let personId: number | null = null;
-  let personName: string | null = null;
-  let personCategory = "CLIENT";
-  let personPhotoPath: string | undefined;
+   let guestId: number | null = null;
+   let guestName: string | null = null;
+   let guestCategory = "GUEST";
+   let guestPhotoPath: string | undefined;
 
-  if (auto_create_unknown_persons) {
-    const key = `${cam.id}:unknown-create`;
-    const now = Date.now();
-    if (now - (lastUnknownPersonAt.get(key) || 0) > UNKNOWN_PERSON_COOLDOWN_MS) {
-      try {
-        const created = await createUnknownPersonFromFace(cam, frameBase64, face);
-        if (created) {
-          personId = created.id;
-          personName = created.name;
-          personCategory = created.category;
-          lastUnknownPersonAt.set(key, now);
-          const p = persons.find((x: any) => x.id === created.id);
-          personPhotoPath = p?.photo_path;
-        }
-      } catch (e) {
-        logError(e as Error, { context: "auto-create unknown person" });
-      }
-    }
-  }
+   if (auto_create_unknown_persons) {
+     const key = `${cam.id}:unknown-create`;
+     const now = Date.now();
+     if (now - (lastUnknownPersonAt.get(key) || 0) > UNKNOWN_PERSON_COOLDOWN_MS) {
+       try {
+         const created = await createUnknownGuestFromFace(cam, frameBase64, face);
+         if (created) {
+           guestId = created.id;
+           guestName = created.name;
+           guestCategory = created.category;
+           lastUnknownPersonAt.set(key, now);
+           const g = await prisma.guest.findUnique({ where: { id: created.id } });
+           guestPhotoPath = g?.photo_path;
+         }
+       } catch (e) {
+         logError(e as Error, { context: "auto-create unknown guest" });
+       }
+     }
+   }
 
-  // Пишем посетителя в хронику ПОСЛЕ разрешения личности: если дедуп нашёл
-  // существующего человека, запись привяжется к нему, а не к абстрактному «Неизвестный».
-  recordVisitor(cam.id, personId, personName || "Неизвестный", snapshot_path);
+   recordVisitor(cam.id, guestId, guestName || "Неизвестный", snapshot_path);
 
-  await persistAndBroadcastEvent({
-    cameraId: cam.id,
-    cameraName: cam.name,
-    personId,
-    event_type: "UNKNOWN",
-    confidence: face?.score || 0.5,
-    snapshot_path,
-    person_name: personName || "Неизвестный",
-    person_category: personCategory,
-    person_photo_path: personPhotoPath,
-  });
-  triggerSmartRecording(cam);
-}
+   await persistAndBroadcastEvent({
+     cameraId: cam.id,
+     cameraName: cam.name,
+     personId: guestId,
+     event_type: "UNKNOWN",
+     confidence: face?.score || 0.5,
+     snapshot_path,
+     person_name: guestName || "Неизвестный",
+     person_category: guestCategory,
+     person_photo_path: guestPhotoPath,
+   });
+   triggerSmartRecording(cam);
+ }
 
 /** Детект → распознавание → обогащение кадра + (debounced) события в БД. */
 async function processDetectedFaces(cam: any, frameBase64: string, faces: any[]): Promise<any[]> {

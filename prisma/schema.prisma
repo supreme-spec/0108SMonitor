@@ -53,6 +53,19 @@ model Category {
   is_system      Boolean @default(false)
 }
 
+model Guest {
+  id            Int      @id @default(autoincrement())
+  name          String   @default("Неизвестный")
+  photo_path    String?
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now())
+  last_seen_at  DateTime?
+  visit_count   Int      @default(0)
+  confidence    Float?
+  camera_id     Int?
+  camera_name   String?
+}
+
 model Person {
   id              Int                @id @default(autoincrement())
   name            String
