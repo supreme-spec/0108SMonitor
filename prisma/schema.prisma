@@ -49,7 +49,7 @@ model Category {
 }
 
 model Person {
-  id              Int               @id @default(autoincrement())
+  id              Int                @id @default(autoincrement())
   name            String
   category        String
   position        String?
@@ -61,12 +61,17 @@ model Person {
   organization    String?
   extra_info      String?
   photo_path      String?
-  is_active       Boolean           @default(true)
-  created_at      DateTime          @default(now())
+  is_active       Boolean            @default(true)
+  created_at      DateTime           @default(now())
   last_seen_at    DateTime?
-  visit_count     Int               @default(0)
-  embedding_count Int               @default(0)
-  
+  visit_count     Int                @default(0)
+  embedding_count Int                @default(0)
+
+  // Импорт персонала
+  import_review   Boolean            @default(false)
+  import_reason   String?
+  import_raw_name String?
+
   photos          PersonPhoto[]
   confirmations   FaceConfirmation[]
   events          Event[]

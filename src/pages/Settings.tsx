@@ -1425,18 +1425,6 @@ export default function Settings() {
 
         {/* AI Module Status Table */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-kraken-border">
-                <th className="pb-2 font-semibold text-kraken-text">Модуль</th>
-                <th className="pb-2 font-semibold text-kraken-text">Installed</th>
-                <th className="pb-2 font-semibold text-kraken-text">Loaded</th>
-                <th className="pb-2 font-semibold text-kraken-text">Active</th>
-                <th className="pb-2 font-semibold text-kraken-text">Version</th>
-                <th className="pb-2 font-semibold text-kraken-text">Действие</th>
-              </tr>
-            </thead>
-            <tbody className="space-y-2">
           {/* CUDA */}
           <div className={`p-4 rounded-xl border ${health?.cuda_available ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
             <div className="flex items-start gap-3">
@@ -1634,10 +1622,10 @@ export default function Settings() {
               </span>
             </div>
           </div>
-        )}
-      </div>
+         )}
+       </div>
 
-      {/* AI Models */}
+       {/* AI Models */}
       <div className="panel p-5">
         <div className="flex items-center gap-2 mb-4">
           <Activity size={18} className={health?.ai_ready ? 'text-kraken-green' : 'text-kraken-red'} />

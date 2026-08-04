@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Square, Trash2, Search, X, Wifi, WifiOff, RefreshCw, ScanLine, Edit2, Video } from 'lucide-react'
+import { Plus, Play, Square, Trash2, Search, X, Wifi, WifiOff, RefreshCw, ScanLine, Edit2, Video, Settings2 } from 'lucide-react'
 import type { Camera } from '../types'
 import { apiFetch } from '../api/client'
 import RoiEditor from '../components/RoiEditor'
@@ -28,6 +28,13 @@ export default function Cameras() {
 
   // Edit camera state
   const [editCamera, setEditCamera] = useState<Camera | null>(null)
+
+  // Camera detail view state
+  const [detailCamera, setDetailCamera] = useState<Camera | null>(null)
+  const [detailTab, setDetailTab] = useState<'general' | 'active-windows'>('general')
+  const [streamSettings, setStreamSettings] = useState<{ row1: any; row2: any } | null>(null)
+  const [streamLoading, setStreamLoading] = useState(false)
+  const [streamSaving, setStreamSaving] = useState(false)
 
   const [confirmState, setConfirmState] = useState<{
     isOpen: boolean;
@@ -84,6 +91,17 @@ export default function Cameras() {
         }
       }
     })
+  }
+
+  const openCameraDetail = async (cam: Camera) => {
+    setDetailCamera(cam)
+    setDetailTab('general')
+    setStreamLoading(true)
+    try {
+      const data = await apiFetch<{ row1: any; row2: any }>(`/cameras/${cam.id}/stream-settings`)
+      setStreamSettings(data)
+    } catch { setStreamSettings({ row1: null, row2: null }) }
+    finally { setStreamLoading(false) }
   }
 
   const handleRecord = async (id: number) => {
@@ -222,8 +240,8 @@ export default function Cameras() {
         </div>
       )}
 
-      {/* ── Camera grid ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+{/* ── Camera grid ── */}
+       <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
         {loading && (
           <div className="col-span-3 text-center py-8 text-kraken-disabled">Загрузка...</div>
         )}
@@ -233,7 +251,7 @@ export default function Cameras() {
           </div>
         )}
         {cameras.map(cam => (
-          <div key={cam.id} className="panel p-4 flex flex-col gap-3">
+          <div key={cam.id} className="panel p-4 flex flex-col gap-3 cursor-pointer hover:border-kraken-purple/50 transition-colors" onClick={() => openCameraDetail(cam)}>
             {/* Header: name + status */}
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 min-w-0">
@@ -385,13 +403,150 @@ export default function Cameras() {
         />
       )}
 
-      {alertState && (
+{alertState && (
         <AlertModal
           isOpen={alertState.isOpen}
           title={alertState.title}
           message={alertState.message}
           onClose={() => setAlertState(null)}
         />
+      )}
+
+      {/* ── Camera Detail Modal ── */}
+      {detailCamera && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setDetailCamera(null)}>
+          <div className="panel p-6 w-full max-w-2xl mx-4 animate-fade-in max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-kraken-text font-bold text-lg">{detailCamera.name}</h2>
+                <p className="text-kraken-muted text-xs mt-0.5">{detailCamera.camera_type} · ID {detailCamera.id} · {detailCamera.source}</p>
+              </div>
+              <button onClick={() => setDetailCamera(null)} className="text-kraken-muted hover:text-kraken-text">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-1 mb-4 border-b border-kraken-border">
+              <button
+                onClick={() => setDetailTab('general')}
+                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  detailTab === 'general'
+                    ? 'border-kraken-purple text-kraken-purple'
+                    : 'border-transparent text-kraken-muted hover:text-kraken-text'
+                }`}
+              >
+                Общие
+              </button>
+              <button
+                onClick={() => setDetailTab('active-windows')}
+                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  detailTab === 'active-windows'
+                    ? 'border-kraken-purple text-kraken-purple'
+                    : 'border-transparent text-kraken-muted hover:text-kraken-text'
+                }`}
+              >
+                Активные окна
+              </button>
+            </div>
+
+            {/* General Tab */}
+            {detailTab === 'general' && (
+              <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-kraken-muted text-xs mb-1 block">Название</label>
+                    <div className="text-kraken-text text-sm">{detailCamera.name}</div>
+                  </div>
+                  <div>
+                    <label className="text-kraken-muted text-xs mb-1 block">Тип</label>
+                    <div className="text-kraken-text text-sm">{detailCamera.camera_type}</div>
+                  </div>
+                  <div>
+                    <label className="text-kraken-muted text-xs mb-1 block">Источник</label>
+                    <div className="text-kraken-text text-sm font-mono break-all">{detailCamera.source}</div>
+                  </div>
+                  <div>
+                    <label className="text-kraken-muted text-xs mb-1 block">Статус</label>
+                    <div className={`text-sm font-bold ${detailCamera.status === 'online' ? 'text-kraken-green' : 'text-kraken-disabled'}`}>
+                      {detailCamera.status === 'online' ? 'ОНЛАЙН' : detailCamera.status === 'connecting' ? 'ПОДКЛЮЧЕНИЕ' : 'ОФЛАЙН'}
+                    </div>
+                  </div>
+                  {detailCamera.zone && (
+                    <div>
+                      <label className="text-kraken-muted text-xs mb-1 block">Зона</label>
+                      <div className="text-kraken-text text-sm">{detailCamera.zone}</div>
+                    </div>
+                  )}
+                  {detailCamera.fps != null && (
+                    <div>
+                      <label className="text-kraken-muted text-xs mb-1 block">FPS</label>
+                      <div className="text-kraken-text text-sm">{detailCamera.fps}</div>
+                    </div>
+                  )}
+                  {detailCamera.ping_ms != null && (
+                    <div>
+                      <label className="text-kraken-muted text-xs mb-1 block">Ping</label>
+                      <div className="text-kraken-text text-sm">{detailCamera.ping_ms} ms</div>
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-3 mt-2">
+                  {detailCamera.status !== 'online' ? (
+                    <button onClick={() => { handleStart(detailCamera.id); setDetailCamera(null) }} className="btn-primary flex-1">Запустить</button>
+                  ) : (
+                    <button onClick={() => { handleStop(detailCamera.id); setDetailCamera(null) }} className="flex-1 bg-kraken-red/10 hover:bg-kraken-red/20 text-kraken-red text-sm py-2 rounded-lg transition-colors">Остановить</button>
+                  )}
+                  <button onClick={() => { setDetailCamera(null); setEditCamera(detailCamera) }} className="btn-ghost flex-1">Редактировать</button>
+                </div>
+              </div>
+            )}
+
+            {/* Active Windows Tab */}
+            {detailTab === 'active-windows' && (
+              <ActiveWindowsTab
+                camera={detailCamera}
+                settings={streamSettings}
+                loading={streamLoading}
+                saving={streamSaving}
+                onSave={async (row1, row2) => {
+                  setStreamSaving(true)
+                  try {
+                    await apiFetch(`/cameras/${detailCamera.id}/stream-settings`, {
+                      method: 'PUT',
+                      body: JSON.stringify({ row1, row2 }),
+                    })
+                    setStreamSettings({ row1, row2 })
+                  } catch (e: any) {
+                    setAlertState({ isOpen: true, title: 'Ошибка', message: 'Ошибка сохранения: ' + e.message })
+                  } finally {
+                    setStreamSaving(false)
+                  }
+                }}
+                onPopulate={() => {
+                  const cam = detailCamera
+                  const defaults = {
+                    row1: {
+                      codec: 'H.264',
+                      gop: 30,
+                      fps: cam.fps || 25,
+                      resolution: '1920x1080',
+                      bitrate: 4096,
+                    },
+                    row2: {
+                      codec: 'H.264',
+                      gop: 30,
+                      fps: cam.fps || 25,
+                      resolution: '1920x1080',
+                      bitrate: 2048,
+                    },
+                  }
+                  setStreamSettings(defaults)
+                }}
+              />
+            )}
+          </div>
+        </div>
       )}
     </div>
   )
@@ -873,6 +1028,130 @@ function AddCameraModal({ onClose, onSaved, usbFound, initialSource = '', initia
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Active Windows Tab ──────────────────────────────────────────────────
+
+interface StreamRow {
+  codec: string
+  gop: number
+  fps: number
+  resolution: string
+  bitrate: number
+}
+
+interface ActiveWindowsTabProps {
+  camera: Camera
+  settings: { row1: any; row2: any } | null
+  loading: boolean
+  saving: boolean
+  onSave: (row1: StreamRow, row2: StreamRow) => Promise<void>
+  onPopulate: () => void
+}
+
+function ActiveWindowsTab({ camera, settings, loading, saving, onSave, onPopulate }: ActiveWindowsTabProps) {
+  const defaultRow: StreamRow = { codec: 'H.264', gop: 30, fps: camera.fps || 25, resolution: '1920x1080', bitrate: 4096 }
+
+  const [row1, setRow1] = useState<StreamRow>(settings?.row1 || defaultRow)
+  const [row2, setRow2] = useState<StreamRow>(settings?.row2 || { ...defaultRow, bitrate: 2048 })
+
+  useEffect(() => {
+    if (settings) {
+      setRow1(settings.row1 || defaultRow)
+      setRow2(settings.row2 || { ...defaultRow, bitrate: 2048 })
+    }
+  }, [settings])
+
+  const handleSave = async () => {
+    await onSave(row1, row2)
+  }
+
+  const fieldLabel = (label: string) => (
+    <label className="text-kraken-muted text-[10px] mb-0.5 block uppercase tracking-wider">{label}</label>
+  )
+
+  const fieldInput = (value: any, onChange: (v: any) => void, type: string = 'text') => (
+    <input
+      type={type}
+      value={value}
+      onChange={e => onChange(type === 'number' ? (e.target.value ? parseInt(e.target.value) || 0 : 0) : e.target.value)}
+      className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono"
+    />
+  )
+
+  const renderRow = (row: StreamRow, setRow: (r: StreamRow) => void, label: string) => (
+    <div className="border border-kraken-border rounded-xl p-4">
+      <div className="text-kraken-text text-xs font-semibold mb-3">{label}</div>
+      <div className="grid grid-cols-5 gap-3">
+        <div>
+          {fieldLabel('Кодек')}
+          <select
+            value={row.codec}
+            onChange={e => setRow({ ...row, codec: e.target.value })}
+            className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
+          >
+            <option value="H.264">H.264</option>
+            <option value="H.265">H.265</option>
+          </select>
+        </div>
+        <div>
+          {fieldLabel('GOP')}
+          {fieldInput(row.gop, v => setRow({ ...row, gop: v }), 'number')}
+        </div>
+        <div>
+          {fieldLabel('FPS')}
+          {fieldInput(row.fps, v => setRow({ ...row, fps: v }), 'number')}
+        </div>
+        <div>
+          {fieldLabel('Разрешение')}
+          <select
+            value={row.resolution}
+            onChange={e => setRow({ ...row, resolution: e.target.value })}
+            className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
+          >
+            <option value="1920x1080">1920x1080</option>
+            <option value="1280x720">1280x720</option>
+            <option value="3840x2160">3840x2160 (4K)</option>
+            <option value="2560x1440">2560x1440 (2K)</option>
+            <option value="640x480">640x480</option>
+          </select>
+        </div>
+        <div>
+          {fieldLabel('Битрейт, кбит/с')}
+          {fieldInput(row.bitrate, v => setRow({ ...row, bitrate: v }), 'number')}
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <span className="text-kraken-muted text-xs">Параметры активных окон для камеры</span>
+        <button
+          onClick={onPopulate}
+          className="text-xs bg-kraken-purple/10 hover:bg-kraken-purple/20 text-kraken-purple px-3 py-1.5 rounded-lg transition-colors"
+        >
+          Заполнить из камеры
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-4 text-kraken-disabled text-sm">Загрузка настроек...</div>
+      ) : (
+        <>
+          {renderRow(row1, setRow1, 'Строка 1 — Основной поток')}
+          {renderRow(row2, setRow2, 'Строка 2 — Дополнительный поток')}
+
+          <div className="flex gap-3 mt-2">
+            <button onClick={handleSave} disabled={saving} className="btn-primary flex-1">
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

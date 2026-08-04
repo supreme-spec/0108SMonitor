@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { X } from 'lucide-react'
 import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
 import AlertPopup from './components/AlertPopup'
@@ -40,6 +41,7 @@ export default function App() {
   if (isProjectionScreen) return <ScreenProjection />
 
   const [page, setPage] = useState('live')
+  const [prevPage, setPrevPage] = useState('live')
 
   // Обработчик навигации из дочерних компонентов (например Settings → Categories)
   useEffect(() => {
@@ -215,8 +217,22 @@ export default function App() {
     setConfirmationQueue(prev => prev.slice(1))
   }, [])
 
-  const renderPage = () => {
-    switch (page) {
+  const handleNavigate = (p: string) => {
+    if (p === 'chronicle') {
+      if (page === 'chronicle') {
+        setPage(prevPage)
+      } else {
+        setPrevPage(page)
+        setPage('chronicle')
+      }
+      return
+    }
+    setPage(p)
+  }
+
+  const renderPage = (targetPage?: string) => {
+    const p = targetPage ?? page
+    switch (p) {
       case 'live':
         return (
           <LiveMonitor
@@ -240,7 +256,7 @@ export default function App() {
       case 'people':
         return <People />
       case 'chronicle':
-        return <Chronicle />
+        return null
       case 'recordings':
         return <SmartRecording />
       case 'events':
@@ -295,7 +311,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
           currentPage={page}
-          onNavigate={setPage}
+          onNavigate={handleNavigate}
           onProjection={() => setShowProjection(p => !p)}
           projectionActive={showProjection}
         />
@@ -309,10 +325,27 @@ export default function App() {
           )}
 
           <div className="flex-1 p-4 overflow-hidden">
-            {renderPage()}
+            {page === 'chronicle' ? renderPage(prevPage === 'chronicle' ? 'live' : prevPage) : renderPage()}
           </div>
         </div>
       </div>
+
+      {page === 'chronicle' && (
+        <div className="fixed inset-0 z-40 flex items-end pointer-events-none">
+          <div className="absolute inset-0 bg-black/60 pointer-events-auto" onClick={() => setPage(prevPage)} />
+          <div className="relative pointer-events-auto w-full h-[40vh] bg-kraken-panel border-t border-kraken-border rounded-t-xl animate-slide-up z-50 flex flex-col shadow-[0_-4px_30px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-kraken-border flex-shrink-0">
+              <h2 className="text-kraken-text font-bold text-sm">Фотохроника</h2>
+              <button onClick={() => setPage(prevPage)} className="text-kraken-muted hover:text-kraken-text transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <Chronicle />
+            </div>
+          </div>
+        </div>
+      )}
 
       <AlertPopup
         alert={currentAlert}

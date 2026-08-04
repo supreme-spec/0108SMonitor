@@ -798,24 +798,65 @@ app.delete(["/api/cameras/:id", "/api/cameras/:id/"], async (req, res) => {
   }
 });
 
-app.get("/api/cameras/:id/snapshot", (req, res) => {
-  const id = parseInt(req.params.id);
-  let imageBuffer: Buffer;
-  const rusSrc = path.join(process.cwd(), "src", "assets", "rus.jpg");
-  const logoSrc = path.join(process.cwd(), "src", "assets", "logo.jpg");
+app.get("/api/cameras/:id/snapshot", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    let imageBuffer: Buffer | null = null;
 
-  if (fs.existsSync(rusSrc)) {
-    imageBuffer = fs.readFileSync(rusSrc);
-  } else if (fs.existsSync(logoSrc)) {
-    imageBuffer = fs.readFileSync(logoSrc);
-  } else {
-    imageBuffer = Buffer.from(FALLBACK_JPEG, "base64");
+    if (cam && cam.is_active && cam.source && !cam.source.startsWith("/dev/video")) {
+      const tempSnapPath = path.join(snapshotsDir, `temp_snap_${id}.jpg`);
+      try {
+        const ffmpegPath = getFfmpegPath();
+        await execAsync(`"${ffmpegPath}" -y -rtsp_transport tcp -i "${cam.source}" -vframes 1 -q:v 2 "${tempSnapPath}"`, { timeout: 5000 });
+        if (fs.existsSync(tempSnapPath)) {
+          imageBuffer = await fs.promises.readFile(tempSnapPath);
+          fs.unlinkSync(tempSnapPath);
+        }
+      } catch (ffmpegErr) {
+        logWarn(`Не удалось сделать живой снимок камеры ${id}: ${ffmpegErr}`);
+      }
+    }
+
+    if (!imageBuffer) {
+      const snapshotsDirPath = path.join(publicDir, "snapshots");
+      const matches: string[] = [];
+      if (fs.existsSync(snapshotsDirPath)) {
+        for (const entry of fs.readdirSync(snapshotsDirPath)) {
+          if (entry.startsWith(`cam${id}_`) && entry.endsWith(".jpg")) {
+            matches.push(path.join(snapshotsDirPath, entry));
+          }
+        }
+      }
+      if (matches.length > 0) {
+        matches.sort().reverse();
+        const latest = matches[0];
+        if (fs.existsSync(latest)) {
+          imageBuffer = fs.readFileSync(latest);
+        }
+      }
+    }
+
+    if (!imageBuffer) {
+      const rusSrc = path.join(process.cwd(), "src", "assets", "rus.jpg");
+      const logoSrc = path.join(process.cwd(), "src", "assets", "logo.jpg");
+      if (fs.existsSync(rusSrc)) {
+        imageBuffer = fs.readFileSync(rusSrc);
+      } else if (fs.existsSync(logoSrc)) {
+        imageBuffer = fs.readFileSync(logoSrc);
+      } else {
+        imageBuffer = Buffer.from(FALLBACK_JPEG, "base64");
+      }
+    }
+
+    res.json({
+      image: imageBuffer.toString("base64"),
+      content_type: "image/jpeg",
+    });
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/snapshot" });
+    res.status(500).json({ detail: "Не удалось получить снимок" });
   }
-
-  res.json({
-    image: imageBuffer.toString("base64"),
-    content_type: "image/jpeg",
-  });
 });
 
 app.post("/api/cameras/:id/capture", (req, res) => {
@@ -823,7 +864,7 @@ app.post("/api/cameras/:id/capture", (req, res) => {
   res.json({ success: true, photo_path: "snapshots/ev1.jpg" });
 });
 
-app.post("/api/cameras/:id/recording/start", async (req, res) => {
+app.post(["/api/cameras/:id/recording/start", "/api/cameras/:id/recording/start/"], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     await prisma.camera.update({ where: { id }, data: { is_smart_recording: true } });
@@ -861,6 +902,31 @@ app.post("/api/cameras/:id/recording/stop", async (req, res) => {
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id/recording/stop" });
     res.status(404).json({ detail: "Camera not found" });
+  }
+});
+
+// ── STREAM SETTINGS API ──
+
+app.get(["/api/cameras/:id/stream-settings", "/api/cameras/:id/stream-settings/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const settings = streamSettings.get(id) || { row1: null, row2: null };
+    res.json(settings);
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/stream-settings", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.put(["/api/cameras/:id/stream-settings", "/api/cameras/:id/stream-settings/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { row1, row2 } = req.body;
+    streamSettings.set(id, { row1, row2 });
+    res.json({ success: true });
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/stream-settings", method: "PUT" });
+    res.status(500).json({ detail: "Internal server error" });
   }
 });
 
@@ -3242,6 +3308,8 @@ const cameraStreams = new Map<number, Set<WebSocket>>();
 const activeFfmpegProcesses = new Map<number, ChildProcessWithoutNullStreams>();
 // Общий последний кадр + распознанные лица на камеру (читается всеми WS-клиентами этой камеры)
 const cameraFrames = new Map<number, { frame: string; faces: any[] }>();
+// Stream settings per camera (in-memory, DB schema deferred)
+const streamSettings = new Map<number, { row1: any; row2: any }>();
 // Единый таймер детекции/распознавания на камеру (запускается один раз, а не на каждого клиента)
 const cameraDetectionTimers = new Map<number, NodeJS.Timeout>();
 // Счётчик неудачных запусков FFmpeg на камеру (для экспоненциального backoff при недоступной камере)
