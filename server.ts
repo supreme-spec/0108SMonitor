@@ -924,7 +924,8 @@ app.get("/api/cameras/:id/roi", async (req, res) => {
     const camera = await prisma.camera.findUnique({ where: { id } })
     if (!camera) return res.status(404).json({ detail: "Camera not found" })
     const zones = camera.roi_zones ? JSON.parse(camera.roi_zones) : []
-    res.json({ zones })
+    const exclusionZones = camera.exclusion_zones ? JSON.parse(camera.exclusion_zones) : []
+    res.json({ zones, exclusion_zones: exclusionZones })
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id/roi", method: "GET" })
     res.status(500).json({ detail: "Internal server error" })
@@ -934,13 +935,19 @@ app.get("/api/cameras/:id/roi", async (req, res) => {
 app.put("/api/cameras/:id/roi", async (req, res) => {
   try {
     const id = parseInt(req.params.id)
-    const { zones } = req.body as { zones: any[] }
-    if (!Array.isArray(zones)) return res.status(400).json({ detail: "zones must be an array" })
+    const { roi_zones, exclusion_zones } = req.body as { roi_zones?: any[]; exclusion_zones?: any[] | null }
+    if (roi_zones !== undefined && !Array.isArray(roi_zones)) return res.status(400).json({ detail: "roi_zones must be an array" })
+    if (exclusion_zones !== undefined && exclusion_zones !== null && !Array.isArray(exclusion_zones)) return res.status(400).json({ detail: "exclusion_zones must be an array" })
     const updated = await prisma.camera.update({
       where: { id },
-      data: { roi_zones: JSON.stringify(zones) },
+      data: {
+        roi_zones: roi_zones !== undefined ? JSON.stringify(roi_zones) : undefined,
+        exclusion_zones: exclusion_zones !== undefined ? JSON.stringify(exclusion_zones) : undefined,
+      },
     })
-    res.json({ success: true, zones })
+    const zones = updated.roi_zones ? JSON.parse(updated.roi_zones) : []
+    const exclusionZones = updated.exclusion_zones ? JSON.parse(updated.exclusion_zones) : []
+    res.json({ success: true, zones, exclusion_zones: exclusionZones })
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id/roi", method: "PUT" })
     res.status(500).json({ detail: "Internal server error" })
