@@ -9,6 +9,7 @@ import LiveMonitor from './pages/LiveMonitor'
 import MultiCamera from './pages/MultiCamera'
 import ScreenProjection from './pages/ScreenProjection'
 import People from './pages/People'
+import HeroSection from './pages/HeroSection'
 import Events from './pages/Events'
 import Cameras from './pages/Cameras'
 import Settings from './pages/Settings'
@@ -61,6 +62,7 @@ export default function App() {
   const currentConfirmation = confirmationQueue[0] ?? null
   const [latestFace, setLatestFace] = useState<FaceDetection | null>(null)
   const [showProjection, setShowProjection] = useState(false)
+  const [liveKey, setLiveKey] = useState(0)
   const [notifyEnabled, setNotifyEnabled] = useState(() =>
     localStorage.getItem('kraken_notify') !== 'false'
   )
@@ -208,7 +210,16 @@ export default function App() {
   // to avoid duplicate triggers (was calling both App.tsx and LiveMonitor.tsx)
 
   const goToEvents = useCallback(() => setPage('events'), [])
+  const goToHero = useCallback(() => setPage('hero'), [])
   const goToPeople = useCallback(() => setPage('people'), [])
+
+  // Сбрасываем layout LiveMonitor при переходе на страницу live
+  useEffect(() => {
+    if (page === 'live') {
+      localStorage.removeItem('kraken_free_layout_v2')
+      setLiveKey(k => k + 1)
+    }
+  }, [page])
 
   // Закрыть/снять текущий запрос подтверждения (после решения или вручную)
   const dismissConfirmation = useCallback(() => {
@@ -220,6 +231,7 @@ export default function App() {
       case 'live':
         return (
           <LiveMonitor
+            key={liveKey}
             cameras={cameras}
             selectedCameraId={selectedCameraId}
             onSelectCamera={setSelectedCameraId}
@@ -239,6 +251,8 @@ export default function App() {
         )
       case 'people':
         return <People />
+      case 'hero':
+        return <HeroSection />
       case 'chronicle':
         return <Chronicle />
       case 'recordings':
@@ -262,6 +276,7 @@ export default function App() {
       default:
         return (
           <LiveMonitor
+            key={liveKey}
             cameras={cameras}
             selectedCameraId={selectedCameraId}
             onSelectCamera={setSelectedCameraId}
@@ -282,7 +297,7 @@ export default function App() {
         onSelectCamera={setSelectedCameraId}
         alertCount={alertHistory.length}
         onOpenAlerts={() => setPage('events')}
-        onNavToБД={() => setPage('people')}
+        onNavToБД={goToHero}
         releaseButton={
           <ReleaseButton
             selectedCameraId={selectedCameraId}
