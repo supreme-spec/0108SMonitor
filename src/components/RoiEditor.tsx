@@ -59,6 +59,7 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
   const [cameraLoading, setCameraLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [cameraWarning, setCameraWarning] = useState('')
+  const [checkingCamera, setCheckingCamera] = useState(false)
   const [error, setError] = useState('')
   const [newLabel, setNewLabel] = useState('Зона 1')
   const [confirmState, setConfirmState] = useState<{
@@ -129,6 +130,30 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
       setZones([])
     }
   }, [cameraId])
+
+  const checkCameraNow = useCallback(async () => {
+    setCheckingCamera(true)
+    setCameraWarning('')
+    setError('')
+    try {
+      const cams = await apiFetch<any[]>(`/cameras`)
+      const cam = cams.find(c => c.id === cameraId)
+      if (!cam) {
+        setError('Камера не найдена')
+      } else if (!cam.is_active) {
+        setError('Камера отключена. Включите камеру в настройках перед настройкой зон.')
+      } else if (cam.status && cam.status !== 'online') {
+        setCameraWarning(`Камера недоступна: ${cam.status.replace('error:', '')}. FFmpeg не может подключиться к потоку.`)
+      } else {
+        setCameraWarning('')
+        loadSnapshot()
+      }
+    } catch {
+      setCameraWarning('Не удалось проверить камеру. Попробуйте ещё раз.')
+    } finally {
+      setCheckingCamera(false)
+    }
+  }, [cameraId, loadSnapshot])
 
   useEffect(() => {
     if (!cameraLoading) {
@@ -405,8 +430,16 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
           ) : (
           <>
             {cameraWarning && (
-              <div className="mb-3 px-3 py-2 rounded-lg border border-kraken-orange/40 bg-kraken-orange/10 text-kraken-orange text-xs">
-                {cameraWarning}
+              <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg border border-kraken-orange/40 bg-kraken-orange/10 text-kraken-orange text-xs">
+                <span className="flex-1">{cameraWarning}</span>
+                <button
+                  onClick={checkCameraNow}
+                  disabled={checkingCamera}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md bg-kraken-orange/20 hover:bg-kraken-orange/30 transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={checkingCamera ? 'animate-spin' : ''} />
+                  {checkingCamera ? 'Проверка...' : 'Проверить'}
+                </button>
               </div>
             )}
           {loading && (
