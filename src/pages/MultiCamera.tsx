@@ -3,7 +3,7 @@
  * Можно добавлять/убирать блоки: события, распознанный человек.
  * Клик на камеру — разворачивает на весь экран.
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import LiveVideo from '../components/LiveVideo'
 import EventsFeed from '../components/EventsFeed'
 import PersonCard from '../components/PersonCard'
@@ -254,6 +254,24 @@ interface CellProps {
 function CameraCell({ camera, onFullscreen, onFaceDetected }: CellProps) {
   const isOnline = camera.status === 'online'
 
+  const statusText = useMemo(() => {
+    if (isOnline) return 'Онлайн'
+    const s = camera.status || ''
+    if (s.startsWith('error:')) {
+      const code = s.replace('error:', '')
+      const map: Record<string, string> = {
+        rtsp_timeout: 'Нет доступа к потоку',
+        ffmpeg_crash: 'Ошибка потока',
+        auth_failed: 'Ошибка авторизации',
+        camera_offline: 'Камера выключена',
+        stream_error: 'Ошибка потока',
+        ffmpeg_killed: 'Прервано',
+      }
+      return map[code] || `Недоступна (${code})`
+    }
+    return 'ОФЛАЙН'
+  }, [camera.status, isOnline])
+
   return (
     <div className="relative rounded-xl overflow-hidden border border-kraken-border bg-kraken-base group min-h-0">
       {/* Видео */}
@@ -264,9 +282,7 @@ function CameraCell({ camera, onFullscreen, onFaceDetected }: CellProps) {
           <div className="text-3xl opacity-20">📷</div>
           <span className="text-xs">{camera.name}</span>
           <span className="text-[10px] text-kraken-red">
-            {camera.status?.startsWith('error:')
-              ? `Недоступна (${camera.status.replace('error:', '')})`
-              : 'ОФЛАЙН'}
+            {statusText}
           </span>
         </div>
       )}

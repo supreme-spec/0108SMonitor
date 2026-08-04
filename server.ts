@@ -3708,10 +3708,11 @@ const cameraCircuitBreakers = new Map<number, CircuitBreakerEntry>();
 /** Классифицирует ошибку FFmpeg по содержимому stderr для диагностики. */
 function classifyFfmpegError(stderrText: string, code: number | null): string {
   const lower = stderrText.toLowerCase();
-  if (lower.includes("authorization") || lower.includes("401") || lower.includes("403") || lower.includes("wrong password") || lower.includes("permission denied")) return "error:auth_failed";
-  if (lower.includes("connection refused") || lower.includes("connection reset") || lower.includes("timed out") || lower.includes("timeout")) return "error:rtsp_timeout";
+  if (lower.includes("authorization") || lower.includes("401") || lower.includes("403") || lower.includes("wrong password") || lower.includes("permission denied") || lower.includes("unauthorized") || lower.includes("forbidden")) return "error:auth_failed";
+  if (lower.includes("connection refused") || lower.includes("connection reset") || lower.includes("timed out") || lower.includes("timeout") || lower.includes("error number -138")) return "error:rtsp_timeout";
   if (lower.includes("no such file") || lower.includes("device or resource busy")) return "error:camera_offline";
   if (lower.includes("invalid data") || lower.includes("invalid url")) return "error:stream_error";
+  if (lower.includes("server returned 4xx") || lower.includes("server returned 401") || lower.includes("server returned 403")) return "error:auth_failed";
   if (code === -2 /* SIGINT */ || code === -9 /* SIGKILL */) return "error:ffmpeg_killed";
   return "error:ffmpeg_crash";
 }
@@ -3902,6 +3903,7 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
       if (code !== 0 && code !== null) {
         logWarn(`FFmpeg exited unexpectedly for camera ${cam.id}, code: ${code}, signal: ${signal}`);
         const reason = classifyFfmpegError(stderrBuffer, code);
+        logWarn(`FFmpeg stderr for camera ${cam.id} (${reason}): ${stderrBuffer.slice(-500)}`);
         prisma.camera.update({ where: { id: cam.id }, data: { status: reason } }).catch(() => {});
       }
       activeFfmpegProcesses.delete(cam.id);
