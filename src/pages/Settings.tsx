@@ -349,7 +349,7 @@ export default function Settings() {
   }
 
   const handleToggleModule = async (category: 'detectors' | 'recognizers' | 'trackers', module: string, enabled: boolean) => {
-    const next = { ...modules, [category]: { ...modules[category] as Record<string, boolean>, [module]: enabled } }
+    const next = { ...modules, [category]: { ...(modules[category] as Record<string, boolean>), [module]: enabled } }
     setModules(next)
     // TODO: вызвать API для сохранения настроек модулей
   }
@@ -1426,8 +1426,8 @@ export default function Settings() {
         </p>
 
         {/* AI Module Status Table */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* CUDA */}
+        <div className="overflow-x-auto">
+          {/* CUDA */}
           <div className={`p-4 rounded-xl border ${health?.cuda_available ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
             <div className="flex items-start gap-3">
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${health?.cuda_available ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
@@ -1624,10 +1624,10 @@ export default function Settings() {
               </span>
             </div>
           </div>
-        )}
-      </div>
+         )}
+       </div>
 
-      {/* AI Models */}
+       {/* AI Models */}
       <div className="panel p-5">
         <div className="flex items-center gap-2 mb-4">
           <Activity size={18} className={health?.ai_ready ? 'text-kraken-green' : 'text-kraken-red'} />
@@ -1707,6 +1707,14 @@ export default function Settings() {
             <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
             {syncing ? 'Синхронизация...' : 'Синхронизировать с БД'}
           </button>
+          <a
+            href="/api/backup/full"
+            className="btn-ghost flex items-center gap-2 text-sm"
+            title="Скачать ZIP архив со всеми данными"
+          >
+            <Download size={14} />
+            БД в ZIP
+          </a>
         </div>
 
         {syncMsg && (

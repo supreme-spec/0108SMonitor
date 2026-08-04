@@ -70,7 +70,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     const res = await fetch(url, {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options?.headers,
       },

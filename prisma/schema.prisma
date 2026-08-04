@@ -72,13 +72,19 @@ model Person {
   visit_count     Int                @default(0)
   embedding_count Int                @default(0)
   episode_persons EpisodePerson[]
+
+  // Импорт персонала
+  import_review   Boolean            @default(false)
+  import_reason   String?
+  import_raw_name String?
+
+  photos          PersonPhoto[]
+  confirmations   FaceConfirmation[]
   events          Event[]
   descriptors     FaceDescriptor[]
   incidents       Incident[]
   policies        PersonPolicy[]
   tags            Tag[]
-  confirmations   FaceConfirmation[]
-  photos          PersonPhoto[]
 }
 
 model FaceDescriptor {
