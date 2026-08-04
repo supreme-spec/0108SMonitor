@@ -3675,6 +3675,7 @@ const activeFfmpegProcesses = new Map<number, ChildProcessWithoutNullStreams>();
 const cameraFrames = new Map<number, { frame: string; faces: any[]; dropped: number }>();
 // Stream settings per camera (in-memory, DB schema deferred)
 const streamSettings = new Map<number, { row1: any; row2: any }>();
+const cameraZoneCache = new Map<number, { zones: any[]; exclusionZones: any[] }>();
 // Bounded очередь кадров для AI detection: дробим поток (25 FPS) от AI (10-12 FPS)
 // Когда очередь переполнена — выбрасываем старый кадр (FIFO), AI всегда видит свежий
 const AI_QUEUE_MAX = 3;
@@ -3704,6 +3705,71 @@ interface CircuitBreakerEntry {
   openedAt: number;
 }
 const cameraCircuitBreakers = new Map<number, CircuitBreakerEntry>();
+
+// ── Zone helpers ──────────────────────────────────────────────────────────────
+
+function parseZones(raw: string | null | undefined): any[] {
+  try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+
+function loadCameraZones(cam: any): { zones: any[]; exclusionZones: any[] } {
+  const cached = cameraZoneCache.get(cam.id);
+  if (cached) return cached;
+  const zones = parseZones(cam.roi_zones);
+  const exclusionZones = parseZones(cam.exclusion_zones);
+  const result = { zones, exclusionZones };
+  cameraZoneCache.set(cam.id, result);
+  return result;
+}
+
+function isPointInRect(px: number, py: number, zone: any): boolean {
+  const x1 = Math.min(zone.x1, zone.x2);
+  const x2 = Math.max(zone.x1, zone.x2);
+  const y1 = Math.min(zone.y1, zone.y2);
+  const y2 = Math.max(zone.y1, zone.y2);
+  return px >= x1 && px <= x2 && py >= y1 && py <= y2;
+}
+
+function faceCenter(face: any): { x: number; y: number } {
+  const box = face.box || {};
+  const x = box.x || 0;
+  const y = box.y || 0;
+  const w = box.width || 0;
+  const h = box.height || 0;
+  return { x: x + w / 2, y: y + h / 2 };
+}
+
+function isFaceInExclusionZone(face: any, exclusionZones: any[]): boolean {
+  if (!exclusionZones.length) return false;
+  const c = faceCenter(face);
+  return exclusionZones.some(z => isPointInRect(c.x, c.y, z));
+}
+
+function getDetectorOptionsForCamera(cam: any): { detector?: string; det_size?: number; min_face_size?: number; min_det_score?: number } {
+  const { zones } = loadCameraZones(cam);
+  const detectionZone = zones.find((z: any) => z.type === 'detection' || !z.type);
+  if (detectionZone) {
+    const opts: any = {};
+    if (detectionZone.detector) opts.detector = detectionZone.detector;
+    if (detectionZone.det_size) opts.det_size = detectionZone.det_size;
+    if (detectionZone.min_face_size) opts.min_face_size = detectionZone.min_face_size;
+    if (detectionZone.min_det_score) opts.min_det_score = detectionZone.min_det_score;
+    return opts;
+  }
+  return {};
+}
+
+function filterFacesByZones(faces: any[], cam: any): any[] {
+  const { zones, exclusionZones } = loadCameraZones(cam);
+  const detectionZones = zones.filter((z: any) => z.type === 'detection' || !z.type);
+
+  return faces.filter((face: any) => {
+    const c = faceCenter(face);
+    if (exclusionZones.length && isFaceInExclusionZone(face, exclusionZones)) return false;
+    if (detectionZones.length && !detectionZones.some((z: any) => isPointInRect(c.x, c.y, z))) return false;
+    return true;
+  });
+}
 
 /** Классифицирует ошибку FFmpeg по содержимому stderr для диагностики. */
 function classifyFfmpegError(stderrText: string, code: number | null): string {
@@ -3998,8 +4064,10 @@ function startCameraDetection(cam: any, fallbackFrame: string) {
     detectionInProgress = true;
     try {
       const frameBase64 = buf.toString("base64");
-      const faces = await detectFaces(buf);
-      const enriched = await processDetectedFaces(cam, frameBase64, faces);
+      const detectorOpts = getDetectorOptionsForCamera(cam);
+      const faces = await detectFaces(buf, detectorOpts);
+      const filtered = filterFacesByZones(faces, cam);
+      const enriched = await processDetectedFaces(cam, frameBase64, filtered);
       shared.faces = enriched;
       shared.dropped = shared.dropped || 0;
       cameraFrames.set(cam.id, shared);

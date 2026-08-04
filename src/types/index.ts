@@ -47,6 +47,11 @@ export interface RoiZone {
   x2: number
   y2: number
   label: string
+  type?: 'detection' | 'exclusion'
+  detector?: string
+  det_size?: number
+  min_face_size?: number
+  min_det_score?: number
 }
 
 export interface Camera {

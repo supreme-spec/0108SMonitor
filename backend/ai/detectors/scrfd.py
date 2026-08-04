@@ -35,16 +35,24 @@ class SCRFD(BaseDetector):
         """Выгрузить модели детектора"""
         return await super().unload_models()
 
-    async def detect(self, image_bytes: bytes) -> List[DetectedFace]:
+    async def detect(self, image_bytes: bytes, det_size: int = 640) -> List[DetectedFace]:
         """Детектировать лица на изображении"""
-        faces = await self._detect_internal(image_bytes, with_embedding=False)
-        return faces
+        faces = await self._detect_internal(image_bytes, with_embedding=False, det_size=det_size)
+        return [
+            DetectedFace(
+                box=f.get("bbox", [0, 0, 0, 0]),
+                score=f.get("det_score", 0),
+                landmarks=f.get("kps"),
+                embedding=None,
+            )
+            for f in faces
+        ]
 
-    async def detect_with_embedding(self, image_bytes: bytes) -> List[Dict[str, Any]]:
+    async def detect_with_embedding(self, image_bytes: bytes, det_size: int = 640) -> List[Dict[str, Any]]:
         """Детектировать лица и извлечь эмбеддинги"""
-        return await self._detect_internal(image_bytes, with_embedding=True)
+        return await self._detect_internal(image_bytes, with_embedding=True, det_size=det_size)
 
-    async def _detect_internal(self, image_bytes: bytes, with_embedding: bool = True) -> List[Any]:
+    async def _detect_internal(self, image_bytes: bytes, with_embedding: bool = True, det_size: int = 640) -> List[Any]:
         """Internal detection using InsightFace"""
         if not self._face_app:
             # Try to load if not initialized
@@ -58,6 +66,11 @@ class SCRFD(BaseDetector):
             # Decode image
             img = Image.open(io.BytesIO(image_bytes))
             img_rgb = np.array(img.convert("RGB"))
+            
+            # Resize to target det_size if needed
+            target = (det_size, det_size)
+            if img_rgb.shape[:2] != target:
+                img_rgb = np.array(Image.fromarray(img_rgb).resize(target, Image.Resampling.LANCZOS))
             
             # Detect faces
             faces = self._face_app.get(img_rgb)

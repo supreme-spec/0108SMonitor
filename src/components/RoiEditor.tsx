@@ -21,6 +21,10 @@ interface RoiZone {
   y2: number
   label: string
   type?: 'detection' | 'exclusion'
+  detector?: string
+  det_size?: number
+  min_face_size?: number
+  min_det_score?: number
 }
 
 interface Props {
@@ -62,6 +66,11 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
   const [checkingCamera, setCheckingCamera] = useState(false)
   const [error, setError] = useState('')
   const [newLabel, setNewLabel] = useState('Зона 1')
+  const [newDetector, setNewDetector] = useState('')
+  const [newDetSize, setNewDetSize] = useState<number | ''>('')
+  const [newMinFace, setNewMinFace] = useState<number | ''>('')
+  const [newMinScore, setNewMinScore] = useState<number | ''>('')
+  const [selectedZoneIdx, setSelectedZoneIdx] = useState<number | null>(null)
   const [confirmState, setConfirmState] = useState<{
     isOpen: boolean;
     title: string;
@@ -295,11 +304,20 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
         y2: Math.round(ox2.y),
         label,
         type: mode,
+        detector: newDetector || undefined,
+        det_size: newDetSize ? Number(newDetSize) : undefined,
+        min_face_size: newMinFace ? Number(newMinFace) : undefined,
+        min_det_score: newMinScore ? Number(newMinScore) : undefined,
       },
     ])
     // Auto-increment label number
     const match = label.match(/^(.*?)(\d+)$/)
     if (match) setNewLabel(`${match[1]}${parseInt(match[2]) + 1}`)
+    setNewDetector('')
+    setNewDetSize('')
+    setNewMinFace('')
+    setNewMinScore('')
+    setSelectedZoneIdx(null)
     setCurrentRect(null)
   }
 
@@ -489,15 +507,21 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
               {zones.map((z, i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs border"
+                  onClick={() => setSelectedZoneIdx(i)}
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs border cursor-pointer ${selectedZoneIdx === i ? 'ring-1 ring-kraken-purple' : ''}`}
                   style={{ borderColor: COLORS[i % COLORS.length], color: COLORS[i % COLORS.length] }}
                 >
                   <span className="font-medium">{z.label || `Зона ${i + 1}`}</span>
                   <span className="text-kraken-muted font-mono text-[10px]">
                     {Math.round(z.x2 - z.x1)}×{Math.round(z.y2 - z.y1)}px
                   </span>
+                  {z.detector && (
+                    <span className="text-[10px] bg-kraken-purple/20 text-kraken-purple px-1 rounded">
+                      {z.detector}
+                    </span>
+                  )}
                   <button
-                    onClick={() => deleteZone(i)}
+                    onClick={(e) => { e.stopPropagation(); deleteZone(i) }}
                     className="hover:text-kraken-red transition-colors ml-0.5"
                     title="Удалить зону"
                   >
@@ -512,6 +536,103 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
             <p className="text-kraken-disabled text-xs">
               Зоны не заданы — детектор работает по всему кадру.
             </p>
+          )}
+
+          {/* Detector config for selected zone or new zone */}
+          {(selectedZoneIdx !== null || mode === 'detection') && (
+            <div className="p-3 rounded-lg bg-kraken-hover border border-kraken-border space-y-2">
+              <div className="text-kraken-muted text-[10px] uppercase tracking-wider">
+                {selectedZoneIdx !== null ? 'Детектор зоны' : 'Детектор для новых зон'}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-kraken-muted text-[10px] mb-0.5 block">Детектор</label>
+                  <select
+                    value={selectedZoneIdx !== null ? (zones[selectedZoneIdx]?.detector || '') : newDetector}
+                    onChange={e => {
+                      const v = e.target.value
+                      if (selectedZoneIdx !== null) {
+                        setZones(prev => prev.map((z, i) => i === selectedZoneIdx ? { ...z, detector: v || undefined } : z))
+                      } else {
+                        setNewDetector(v)
+                      }
+                    }}
+                    className="w-full bg-kraken-base border border-kraken-border text-kraken-text text-xs px-2 py-1 rounded-lg"
+                  >
+                    <option value="">По умолчанию</option>
+                    <option value="scrfd">SCRFD</option>
+                    <option value="yoloface">YOLO-Face</option>
+                    <option value="retinaface">RetinaFace</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-kraken-muted text-[10px] mb-0.5 block">Размер детекции (det_size)</label>
+                  <select
+                    value={selectedZoneIdx !== null ? (zones[selectedZoneIdx]?.det_size || '') : newDetSize}
+                    onChange={e => {
+                      const v = e.target.value ? Number(e.target.value) : ''
+                      if (selectedZoneIdx !== null) {
+                        setZones(prev => prev.map((z, i) => i === selectedZoneIdx ? { ...z, det_size: v || undefined } : z))
+                      } else {
+                        setNewDetSize(v)
+                      }
+                    }}
+                    className="w-full bg-kraken-base border border-kraken-border text-kraken-text text-xs px-2 py-1 rounded-lg"
+                  >
+                    <option value="">По умолчанию</option>
+                    <option value="640">640</option>
+                    <option value="1024">1024</option>
+                    <option value="1280">1280</option>
+                    <option value="1600">1600</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-kraken-muted text-[10px] mb-0.5 block">Мин. размер лица (px)</label>
+                  <input
+                    type="number"
+                    value={selectedZoneIdx !== null ? (zones[selectedZoneIdx]?.min_face_size || '') : newMinFace}
+                    onChange={e => {
+                      const v = e.target.value ? Number(e.target.value) : ''
+                      if (selectedZoneIdx !== null) {
+                        setZones(prev => prev.map((z, i) => i === selectedZoneIdx ? { ...z, min_face_size: v || undefined } : z))
+                      } else {
+                        setNewMinFace(v)
+                      }
+                    }}
+                    className="w-full bg-kraken-base border border-kraken-border text-kraken-text text-xs px-2 py-1 rounded-lg"
+                    placeholder="40"
+                  />
+                </div>
+                <div>
+                  <label className="text-kraken-muted text-[10px] mb-0.5 block">Мин. уверенность (0..1)</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={selectedZoneIdx !== null ? (zones[selectedZoneIdx]?.min_det_score || '') : newMinScore}
+                    onChange={e => {
+                      const v = e.target.value ? Number(e.target.value) : ''
+                      if (selectedZoneIdx !== null) {
+                        setZones(prev => prev.map((z, i) => i === selectedZoneIdx ? { ...z, min_det_score: v || undefined } : z))
+                      } else {
+                        setNewMinScore(v)
+                      }
+                    }}
+                    className="w-full bg-kraken-base border border-kraken-border text-kraken-text text-xs px-2 py-1 rounded-lg"
+                    placeholder="0.6"
+                  />
+                </div>
+              </div>
+              {selectedZoneIdx !== null && (
+                <button
+                  onClick={() => setSelectedZoneIdx(null)}
+                  className="text-[10px] text-kraken-purple hover:underline"
+                >
+                  Снять выделение
+                </button>
+              )}
+            </div>
           )}
 
           {error && (

@@ -259,20 +259,38 @@ class AIManager:
             print(f"Failed to load tracker {name}: {e}")
             return False
 
-    async def detect(self, image_bytes: bytes) -> list:
+    async def detect(self, image_bytes: bytes, detector_name: str = None) -> list:
         """
         Детектировать лица на изображении через активный детектор
         
         Args:
             image_bytes: Байты изображения
+            detector_name: Опциональное переопределение детектора для этого запроса
             
         Returns:
             Список детектированных лиц
         """
-        if not self._active_detector:
+        if not self._active_detector and not detector_name:
             return []
-            
-        return await self._active_detector.detect_with_embedding(image_bytes)
+        
+        original_detector = None
+        if detector_name and detector_name != (self._config_data.get('active', {}).get('detector') if self._config_data else None):
+            try:
+                original_detector = self._config_data.get('active', {}).get('detector') if self._config_data else None
+                success = await self._load_detector(detector_name)
+                if not success:
+                    return []
+            except Exception:
+                return []
+        
+        try:
+            return await self._active_detector.detect_with_embedding(image_bytes)
+        finally:
+            if original_detector:
+                try:
+                    await self._load_detector(original_detector)
+                except Exception:
+                    pass
 
     async def recognize(self, face_image: bytes, category: str = None) -> dict:
         """

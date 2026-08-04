@@ -61,11 +61,11 @@ class BaseDetector(BaseModule):
         return True
 
     @abstractmethod
-    async def detect(self, image_bytes: bytes) -> List[DetectedFace]:
+    async def detect(self, image_bytes: bytes, det_size: int = 640) -> List[DetectedFace]:
         """Детектировать лица на изображении"""
         pass
 
     @abstractmethod
-    async def detect_with_embedding(self, image_bytes: bytes) -> List[Dict[str, Any]]:
+    async def detect_with_embedding(self, image_bytes: bytes, det_size: int = 640) -> List[Dict[str, Any]]:
         """Детектировать лица и извлечь эмбеддинги"""
         pass

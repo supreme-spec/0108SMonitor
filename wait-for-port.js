@@ -5,7 +5,7 @@ const timeout = parseInt(process.argv[3] || '60000', 10);
 const start = Date.now();
 
 function wait() {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const socket = new net.Socket();
     socket.connect(port, '127.0.0.1', () => {
       socket.destroy();

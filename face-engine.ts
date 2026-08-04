@@ -697,7 +697,8 @@ async function assessQualityFromServer(imageBuffer: Buffer): Promise<any | null>
 }
 
 async function detectFacesFromServer(
-  imgBuffer: Buffer
+  imgBuffer: Buffer,
+  options: { detector?: string; det_size?: number; min_face_size?: number; min_det_score?: number } = {}
 ): Promise<DetectedFace[]> {
   try {
     const formData = new FormData();
@@ -705,6 +706,10 @@ async function detectFacesFromServer(
     const blob = new Blob([uint8Array], { type: "image/jpeg" });
     formData.append("image", blob as any, "image.jpg");
     formData.append("with_descriptors", "true");
+    if (options.detector) formData.append("detector", options.detector);
+    if (options.det_size) formData.append("det_size", String(options.det_size));
+    if (options.min_face_size) formData.append("min_face_size", String(options.min_face_size));
+    if (options.min_det_score !== undefined && options.min_det_score !== null) formData.append("min_det_score", String(options.min_det_score));
 
     const response = await apiFetchWithKey(`${FACE_SERVER_URL}/detect-faces`, {
       method: "POST",
@@ -712,7 +717,6 @@ async function detectFacesFromServer(
     });
 
     if (!response.ok) {
-      // 400 = пустой/битый кадр (нет захвата) — это не ошибка сервера, не спамим лог
       if (response.status === 400) {
         logDebug(`Детекция: кадр пустой или невалиден (400), пропуск`);
         return [];
@@ -844,7 +848,12 @@ async function syncIndexWithPython(): Promise<void> {
 
 export async function detectFaces(
   imagePathOrBuffer: string | Buffer,
-  options: any = {}
+  options: {
+    detector?: string;
+    det_size?: number;
+    min_face_size?: number;
+    min_det_score?: number;
+  } = {}
 ): Promise<DetectedFace[]> {
   // Проверяем здоровье сервера
   const healthy = await ensurePythonServerAvailable();
@@ -867,7 +876,7 @@ export async function detectFaces(
       imgBuffer = imagePathOrBuffer;
     }
 
-    return await detectFacesFromServer(imgBuffer);
+    return await detectFacesFromServer(imgBuffer, options);
   } catch (err) {
     logError(err as Error, { context: "Детекция" });
     return [];

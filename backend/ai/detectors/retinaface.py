@@ -30,12 +30,12 @@ class RetinaFace(BaseDetector):
         """Выгрузить модели детектора"""
         return await super().unload_models()
 
-    async def detect(self, image_bytes: bytes) -> list:
+    async def detect(self, image_bytes: bytes, det_size: int = 640) -> list:
         """Детектировать лица на изображении"""
         # TODO: Реализовать детекцию через Python-сервер
         return []
 
-    async def detect_with_embedding(self, image_bytes: bytes) -> list:
+    async def detect_with_embedding(self, image_bytes: bytes, det_size: int = 640) -> list:
         """Детектировать лица и извлечь эмбеддинги"""
         # TODO: Реализовать детекцию с эмбеддингами
         return []

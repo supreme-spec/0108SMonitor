@@ -1196,6 +1196,10 @@ async def detect_faces(
     min_confidence: Optional[float] = None,
     with_descriptors: Optional[bool] = False,
     with_quality: Optional[bool] = False,
+    detector: Optional[str] = None,
+    det_size: Optional[str] = None,
+    min_face_size: Optional[int] = None,
+    min_det_score: Optional[float] = None,
 ):
     """Detects faces on image. Applies quality gate."""
     try:
@@ -1205,22 +1209,47 @@ async def detect_faces(
         if img is None or img.size == 0:
             raise HTTPException(status_code=400, detail="Empty or invalid image")
 
-        # Try AI Manager first
-        faces_data = None
+        # Determine detector instance
+        active_detector = None
+        requested_detector = detector
+        if not requested_detector and ai_manager_initialized and ai_manager and ai_manager._config_data:
+            requested_detector = ai_manager._config_data.get('active', {}).get('detector')
+        if not requested_detector:
+            requested_detector = 'scrfd'
+
         if ai_manager_initialized and ai_manager:
             try:
-                faces_data = await ai_manager.detect(image_bytes)
+                current = ai_manager._config_data.get('active', {}).get('detector') if ai_manager._config_data else None
+                if requested_detector != current:
+                    await ai_manager.switch_detector_async(requested_detector)
+                active_detector = ai_manager._active_detector
             except Exception as ai_err:
                 logger.warning(f"AI Manager detect failed, falling back to face_app: {ai_err}")
 
+        effective_det_size = 640
+        try:
+            effective_det_size = int(det_size) if det_size else 640
+        except Exception:
+            effective_det_size = 640
+
+        if active_detector is not None:
+            try:
+                faces_data = await active_detector.detect_with_embedding(image_bytes, det_size=effective_det_size)
+            except Exception as ai_err:
+                logger.warning(f"Active detector failed, falling back to face_app: {ai_err}")
+                active_detector = None
+
         # Fallback to original face_app
-        if not faces_data:
+        if active_detector is None:
             if not is_initialized or face_app is None:
                 return {"faces": []}
             try:
-                faces_data = face_app.get(img)
+                img_rgb = load_image_from_bytes(image_bytes)
+                if effective_det_size != 640 and img_rgb is not None:
+                    img_rgb = np.array(Image.fromarray(img_rgb).resize((effective_det_size, effective_det_size), Image.Resampling.LANCZOS))
+                faces_data = face_app.get(img_rgb) if img_rgb is not None else face_app.get(load_image_from_bytes(image_bytes))
             except Exception as face_err:
-                logger.error(f"face_app.get() crashed in detect-faces: {face_err}, img shape={img.shape}, dtype={img.dtype}")
+                logger.error(f"face_app.get() crashed in detect-faces: {face_err}")
                 import traceback
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Face detection error: {face_err}")
@@ -1232,13 +1261,17 @@ async def detect_faces(
 
         faces_list = faces_data
 
+        effective_min_face = min_face_size if min_face_size is not None else MIN_FACE_SIZE
+        effective_min_score = min_det_score if min_det_score is not None else MIN_DETECTION_SCORE
+
         for face in faces_list[:max_faces]:
             if is_ai_manager_result:
-                # AI Manager format: dict with bbox, det_score, etc.
-                if not passes_quality_gate_from_dict(face):
+                score = float(face.get("det_score", 0))
+                bbox = face.get("bbox", [0, 0, 0, 0])
+                width = int(bbox[2] - bbox[0]) if len(bbox) >= 2 else 0
+                if score < effective_min_score or width < effective_min_face:
                     continue
 
-                bbox = face.get("bbox", [0, 0, 0, 0])
                 box = [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])]
                 detection: Dict[str, Any] = {
                     "box": {
@@ -1247,7 +1280,7 @@ async def detect_faces(
                         "width": box[2] - box[0],
                         "height": box[3] - box[1],
                     },
-                    "score": float(face.get("det_score", 0)),
+                    "score": score,
                     "gender": int(face.get("gender")) if face.get("gender") is not None else None,
                     "gender_str": ("male" if face.get("gender") == 0 else "female") if face.get("gender") is not None else None,
                     "age": int(face.get("age")) if face.get("age") is not None else None,
@@ -1255,7 +1288,6 @@ async def detect_faces(
                 if with_descriptors and face.get("embedding"):
                     detection["descriptor"] = face["embedding"]
                 if with_quality:
-                    # For AI Manager results, compute quality using raw image
                     quality = compute_face_quality_from_dict(face, img, len(faces_list))
                     detection["quality"] = quality
                     detection["pose"] = {
@@ -1266,8 +1298,10 @@ async def detect_faces(
                     detection["enrollment_issues"] = enrollment_issues(quality)
                     detection["enrollment_ok"] = len(detection["enrollment_issues"]) == 0
             else:
-                # InsightFace format: face object
-                if not passes_quality_gate(face):
+                score = float(getattr(face, "det_score", 0))
+                bbox = getattr(face, "bbox", np.array([0, 0, 0, 0]))
+                width = int(bbox[2] - bbox[0]) if len(bbox) >= 2 else 0
+                if score < effective_min_score or width < effective_min_face:
                     continue
 
                 box = face.bbox.astype(int).tolist()
@@ -1278,7 +1312,7 @@ async def detect_faces(
                         "width": box[2] - box[0],
                         "height": box[3] - box[1],
                     },
-                    "score": float(face.det_score),
+                    "score": score,
                     "gender": int(face.gender) if hasattr(face, "gender") and face.gender is not None else None,
                     "gender_str": ("male" if getattr(face, "gender", None) == 0 else "female") if hasattr(face, "gender") and face.gender is not None else None,
                     "age": int(face.age) if hasattr(face, "age") and face.age is not None else None,
