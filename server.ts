@@ -964,7 +964,7 @@ app.get("/api/cameras/:id/snapshot", async (req, res) => {
       const tempSnapPath = path.join(snapshotsDir, `temp_snap_${id}.jpg`);
       try {
         const ffmpegPath = getFfmpegPath();
-        await execAsync(`"${ffmpegPath}" -y -rtsp_transport tcp -i "${cam.source}" -vframes 1 -q:v 2 "${tempSnapPath}"`, { timeout: 5000 });
+        await execAsync(`"${ffmpegPath}" -y -rtsp_transport tcp -i "${cam.source}" -vframes 1 -q:v 2 "${tempSnapPath}"`, { timeout: 10000 });
         if (fs.existsSync(tempSnapPath)) {
           imageBuffer = await fs.promises.readFile(tempSnapPath);
           fs.unlinkSync(tempSnapPath);
@@ -3028,7 +3028,7 @@ async function probeCamera(cam: any): Promise<{ connected: boolean; details: str
         const idx = parseInt((cam.source || "0").trim(), 10);
         const devName = idx === 0 ? "USB Video Device" : `USB Video Device #${idx + 1}`;
         const cmd = `ffprobe -v error -f dshow -list_devices true -i video="${devName}"`;
-        await execAsync(cmd, { timeout: 5000 });
+        await execAsync(cmd, { timeout: 10000 });
         return { connected: true, details: `USB device "${devName}" accessible` };
       } else {
         const devPath = cam.source || "/dev/video0";
@@ -3055,8 +3055,8 @@ async function probeCamera(cam: any): Promise<{ connected: boolean; details: str
     }
 
     const probePath = getFfprobePath();
-    const cmd = `"${probePath}" -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout 5000000 -i "${source}"`;
-    const { stdout } = await execAsync(cmd, { timeout: 6000 });
+    const cmd = `"${probePath}" -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout 15000000 -i "${source}"`;
+    const { stdout } = await execAsync(cmd, { timeout: 10000 });
     const hasStream = stdout.trim().length > 0;
     return { connected: hasStream, details: hasStream ? `Stream probed: ${stdout.trim()}` : "No video stream found" };
   } catch (error: any) {
@@ -3095,7 +3095,7 @@ function buildFfmpegInputArgs(cam: any): string[] {
     }
   }
   // -hide_banner + -loglevel error: не засоряем логи баннером версии/конфигурации на каждом (пере)запуске
-  return ["-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-rtsp_flags", "prefer_tcp", "-timeout", "5000000", "-i", source];
+  return ["-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-rtsp_flags", "prefer_tcp", "-timeout", "15000000", "-i", source];
 }
 
 // Активные записи видео: cameraId -> сессия

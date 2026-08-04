@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "tsx kill-ports.js",
-    "dev": "concurrently \"npm:dev:face\" \"npm:dev:server\" \"npm:dev:vite\"",
+    "dev": "concurrently \"npm:dev:face\" \"npm:dev:server\" \"node wait-for-port.js 3000 60000 && npx vite\"",
     "dev:server": "tsx server.ts",
     "dev:face": ".\\venv\\Scripts\\python.exe face_server.py",
     "dev:vite": "vite",
