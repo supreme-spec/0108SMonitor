@@ -470,7 +470,7 @@ export default function LiveMonitor({
     <div className="h-full flex flex-col overflow-hidden">
 
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-2 mb-1.5 flex-shrink-0">
+      <div className="flex items-center gap-2 mb-0.5 flex-shrink-0">
         <span className="text-kraken-muted text-xs font-semibold">Камера:</span>
         <div className="flex items-center gap-1 flex-1 flex-wrap">
           {cameras.length === 0 && (
@@ -642,7 +642,7 @@ export default function LiveMonitor({
       />
 
       {/* ── Свободный холст ── */}
-      <div ref={containerRef} className="flex-1 relative overflow-hidden bg-kraken-base rounded-xl">
+      <div ref={containerRef} className="flex-1 relative overflow-hidden bg-kraken-base">
 
         {!layout.video.visible && (
           <div className="absolute top-2 left-2 z-20 bg-kraken-red/90 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg">

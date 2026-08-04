@@ -308,7 +308,7 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex-1 p-4 overflow-hidden">
+          <div className="flex-1 p-0 overflow-hidden">
             {renderPage()}
           </div>
         </div>
