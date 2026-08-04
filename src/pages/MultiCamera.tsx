@@ -43,6 +43,7 @@ export default function MultiCamera({ cameras, recentEvents, onLatestFace }: Pro
   const [showMenu, setShowMenu] = useState(false)
   const [detectedPerson, setDetectedPerson] = useState<Person | null>(null)
   const [detectedFace, setDetectedFace] = useState<FaceDetection | null>(null)
+  const [camerasReady, setCamerasReady] = useState(false)
 
   const onLatestFaceRef = useRef(onLatestFace)
   useEffect(() => { onLatestFaceRef.current = onLatestFace }, [onLatestFace])
@@ -65,6 +66,15 @@ export default function MultiCamera({ cameras, recentEvents, onLatestFace }: Pro
     } else {
       setDetectedPerson(null)
     }
+  }, [])
+
+  // Ждём пока FFmpeg запустится для всех активных камер
+  useEffect(() => {
+    const checkCameras = async () => {
+      await new Promise(resolve => setTimeout(resolve, 2500))
+      setCamerasReady(true)
+    }
+    checkCameras()
   }, [])
 
   const toggleExtra = (b: ExtraBlock) => {
@@ -148,6 +158,12 @@ export default function MultiCamera({ cameras, recentEvents, onLatestFace }: Pro
         <div className={`${hasExtras ? 'flex-1 min-w-0' : 'w-full h-full'} overflow-auto`}>
           <div className={`grid ${cols} gap-2 h-full`}
             style={{ gridAutoRows: allCameras.length <= 2 ? '100%' : `calc(50% - 4px)` }}>
+            {!camerasReady && (
+              <div className="col-span-full flex items-center justify-center text-kraken-muted">
+                <div className="animate-spin mr-2">⏳</div>
+                Подключение к камерам...
+              </div>
+            )}
             {allCameras.map(cam => (
               <CameraCell
                 key={cam.id}
@@ -247,7 +263,11 @@ function CameraCell({ camera, onFullscreen, onFaceDetected }: CellProps) {
         <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-kraken-disabled">
           <div className="text-3xl opacity-20">📷</div>
           <span className="text-xs">{camera.name}</span>
-          <span className="text-[10px] text-kraken-red">ОФЛАЙН</span>
+          <span className="text-[10px] text-kraken-red">
+            {camera.status?.startsWith('error:')
+              ? `Недоступна (${camera.status.replace('error:', '')})`
+              : 'ОФЛАЙН'}
+          </span>
         </div>
       )}
 

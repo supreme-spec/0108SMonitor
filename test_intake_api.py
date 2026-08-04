@@ -3,7 +3,7 @@ import requests
 import json
 
 # Test intake endpoint
-url = "http://localhost:8001/intake"
+url = "http://localhost:8002/intake"
 data = {
     "folder": r"D:\bd_gosti\test_dataset",
     "person_name": "Test Person"

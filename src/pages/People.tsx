@@ -2330,6 +2330,19 @@ function BulkImportModal({ onClose, onDone, categories }: {
               {results.failed?.length > 0 && <span className="text-kraken-red font-bold">❌ {results.failed.length} ошибок</span>}
               {results.skipped?.length > 0 && <span className="text-kraken-muted">⏭ {results.skipped.length} пропущено</span>}
             </div>
+            {results.warnings && results.warnings.length > 0 && (
+              <div className="text-xs text-yellow-600">
+                <div className="font-semibold mb-1">⚠️ Возможные дубликаты:</div>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {results.warnings.slice(0, 5).map((w: any, i: number) => (
+                    <li key={i}>
+                      <span className="font-medium">{w.name}</span> похож на: {w.similar.join(', ')}
+                    </li>
+                  ))}
+                  {results.warnings.length > 5 && <li>...и ещё {results.warnings.length - 5}</li>}
+                </ul>
+              </div>
+            )}
             {results.created?.length > 0 && (
               <div className="max-h-32 overflow-y-auto space-y-1">
                 {results.created.map((r: any, i: number) => (

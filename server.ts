@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import crypto from "crypto";
+import * as os from "os";
 import { platform } from "os";
 import fs from "fs";
 import http from "http";
@@ -10,6 +11,7 @@ import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn, exec, execSync, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
+import { FormData } from "formdata-node";
 
 const execAsync = promisify(exec);
 import sharp from "sharp";
@@ -230,6 +232,47 @@ function normalizePersonName(name: string): string {
     }
     return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
   }).join(' ');
+}
+
+/** Levenshtein distance */
+function editDistance(s1: string, s2: string): number {
+  s1 = s1.toLowerCase();
+  s2 = s2.toLowerCase();
+  const costs: number[] = [];
+  for (let i = 0; i <= s1.length; i++) {
+    let lastValue = i;
+    for (let j = 0; j <= s2.length; j++) {
+      if (i === 0) {
+        costs[j] = j;
+      } else if (j > 0) {
+        let newValue = costs[j - 1];
+        if (s1[i - 1] !== s2[j - 1]) {
+          newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+        }
+        costs[j - 1] = lastValue;
+        lastValue = newValue;
+      }
+    }
+    if (i > 0) costs[s2.length] = lastValue;
+  }
+  return costs[s2.length];
+}
+
+/** String similarity (0..1) via Levenshtein */
+function similarity(s1: string, s2: string): number {
+  const longer = s1.length > s2.length ? s1 : s2;
+  const shorter = s1.length > s2.length ? s2 : s1;
+  if (longer.length === 0) return 1.0;
+  return (longer.length - editDistance(longer, shorter)) / longer.length;
+}
+
+/** Find names with similarity >= threshold */
+function findSimilarNames(name: string, existingNames: string[], threshold: number = 0.85): string[] {
+  const normalizedName = normalizePersonName(name);
+  return existingNames.filter(n => {
+    if (n === name) return false;
+    return similarity(normalizedName, normalizePersonName(n)) >= threshold;
+  });
 }
 
 function normalizePositionName(pos: string): string {
@@ -1306,7 +1349,7 @@ app.post(["/api/persons/bulk_delete", "/api/persons/bulk_delete/"], async (req, 
 
 const importJobs: Record<string, any> = {};
 
-app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any(), (req, res) => {
+app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any(), async (req, res) => {
   let files: Express.Multer.File[] = [];
   if (req.file) {
     files.push(req.file);
@@ -1326,103 +1369,193 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
   }
 
   const category = (req.body.category || 'CLIENT').toUpperCase();
-  const jobId = `job_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const jobId = crypto.randomUUID();
 
-  importJobs[jobId] = {
-    status: 'pending',
-    progress: 0,
-    created: [],
-    failed: [],
-    skipped: []
-  };
+  if (!files || files.length === 0) {
+    return res.status(400).json({ error: 'No files uploaded' });
+  }
 
-  // Process files asynchronously
+  // 1. Создаём временную папку для загрузки
+  const tempFolder = path.join(os.tmpdir(), `intake_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
+  fs.mkdirSync(tempFolder, { recursive: true });
+
+  // 2. Сохраняем все файлы во временную папку и извлекаем имя
+  let personName = req.body.person_name || `Unknown_${Date.now()}`;
+  
+  for (const file of files) {
+    // Пытаемся извлечь имя из первого файла, если person_name не передан явно
+    if (!req.body.person_name && file.originalname) {
+      const baseName = path.parse(file.originalname).name;
+      // Эвристика: "Иванов Иван - Директор.jpg" -> "Иванов Иван"
+      const match = baseName.match(/^([А-Яа-яЁё\s\-]+?)(?:\s*[-–]\s*.+)?$/);
+      if (match) {
+        personName = normalizePersonName(match[1].trim());
+      }
+    }
+    
+    const destPath = path.join(tempFolder, file.originalname);
+    fs.writeFileSync(destPath, file.buffer);
+  }
+
+  // 3. Сохраняем статус задачи в памяти
+  importJobs[jobId] = { status: 'pending', progress: 0, total: files.length };
+  res.json({ job_id: jobId, message: 'Import started' });
+
+  // Создаём outputDir для сохранения кропов
+  const safePersonName = personName.replace(/\s+/g, '_');
+  const outputDir = path.join(publicDir, 'photos', 'intake', safePersonName);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  // 4. Асинхронная обработка
   setTimeout(async () => {
     const job = importJobs[jobId];
     if (!job) return;
+    
     job.status = 'processing';
+    job.warnings = [];
+    
+    try {
+      // Создаём FormData
+      const form = new FormData();
+      form.append('folder', tempFolder);
+      form.append('person_name', personName);
+      form.append('output_dir', outputDir);
+      
+      // Вызов Python intake
+      const intakeRes = await fetch(`${process.env.PYTHON_INTAKE_URL || 'http://localhost:8001'}/intake`, {
+        method: 'POST',
+        body: form,
+      });
 
-    for (let index = 0; index < files.length; index++) {
-      const f = files[index];
-      try {
-        const originalName = f.originalname;
-        const ext = path.extname(originalName);
-        const baseName = path.basename(originalName, ext).replace(/_/g, ' ').trim();
-
-        let name: string;
-        let position: string | null = null;
-
-        const dashMatch = baseName.match(/^(.+?)\s+-\s+(.+)$/);
-        if (dashMatch) {
-          name = normalizePersonName(dashMatch[1].trim());
-          position = normalizePositionName(dashMatch[2].trim());
-        } else if (baseName.includes('-')) {
-          const parts = baseName.split('-');
-          name = normalizePersonName(parts[0].trim());
-          position = normalizePositionName(parts.slice(1).join('-').trim()) || null;
-        } else {
-          name = normalizePersonName(baseName);
-        }
-
-        const cleanName = name || "Новый посетитель";
-
-        const photo_path = `photos/${f.filename}`;
-        const fullPath = path.join(publicDir, photo_path);
-
-        // Ищем существующую персону в БД (case-insensitive для SQLite)
-        const existingPersons = await prisma.person.findMany({
-          where: { name: { equals: cleanName } },
-          include: { photos: true },
-          take: 1,
-        });
-        // Fallback: toLowerCase match если Prisma не нашла точное совпадение
-        const existingPerson = existingPersons[0]
-          ?? (await prisma.person.findMany({ include: { photos: true } }))
-              .find((p: any) => namesMatchFIO(p.name, cleanName))
-          ?? null;
-
-        let personId: number;
-        if (existingPerson) {
-          personId = existingPerson.id;
-          const regResult = await enrollPhotoWithGate(personId, cleanName, category, photo_path, fullPath);
-          const isPrimary = existingPerson.photos.length === 0;
-          await prisma.personPhoto.create({
-            data: { person_id: personId, photo_path, is_primary: isPrimary, has_embedding: regResult.hasEmbedding },
-          });
-          if (regResult.hasEmbedding) {
-            await prisma.person.update({ where: { id: personId }, data: { embedding_count: { increment: 1 } } });
-          }
-          if (isPrimary) {
-            await prisma.person.update({ where: { id: personId }, data: { photo_path } });
-          }
-          job.created.push({ name: cleanName, position: existingPerson.position, embeddings: regResult.hasEmbedding ? 1 : 0 });
-        } else {
-          const newPerson = await prisma.person.create({
-            data: { name: cleanName, category, position, is_active: true, visit_count: 0, embedding_count: 0 },
-          });
-          personId = newPerson.id;
-          const regResult = await enrollPhotoWithGate(personId, cleanName, category, photo_path, fullPath);
-          await prisma.personPhoto.create({
-            data: { person_id: personId, photo_path, is_primary: true, has_embedding: regResult.hasEmbedding },
-          });
-          await prisma.person.update({
-            where: { id: personId },
-            data: { photo_path, embedding_count: regResult.hasEmbedding ? 1 : 0 },
-          });
-          // Sync in-memory
-          const created = await prisma.person.findUnique({ where: { id: personId }, include: { photos: true } });
-          if (created) persons.unshift({ ...created });
-          job.created.push({ name: cleanName, position, embeddings: regResult.hasEmbedding ? 1 : 0 });
-        }
-      } catch (err: any) {
-        job.failed.push({ file: f.originalname, error: err.message || 'Ошибка обработки' });
+      if (!intakeRes.ok) {
+        const errorText = await intakeRes.text();
+        throw new Error(`Python intake failed: ${intakeRes.status} ${errorText}`);
       }
-      job.progress = index + 1;
-    }
-    job.status = 'done';
-  }, 100);
 
-  res.json({ job_id: jobId });
+      const intakeResult = await intakeRes.json();
+      
+      let createdCount = 0;
+      let failedCount = 0;
+      const createdList: any[] = [];
+      
+      // Проверка похожих имён для предупреждения о дубликатах
+      const existingAll = await prisma.person.findMany({ select: { name: true } });
+      const existingNames = existingAll.map(p => p.name);
+      const similarNames = findSimilarNames(personName, existingNames, 0.85);
+      if (similarNames.length > 0) {
+        job.warnings!.push({
+          name: personName,
+          similar: similarNames.slice(0, 3)
+        });
+      }
+      
+      // 5. Обработка отчёта и запись в БД
+      for (const item of intakeResult.report || []) {
+        if (item.status === 'passed' && item.embedding && item.output_path) {
+          try {
+            // Находим или создаём персону
+            let person = await prisma.person.findFirst({
+              where: { name: { equals: personName, mode: 'insensitive' } }
+            });
+            
+            if (!person) {
+              person = await prisma.person.create({
+                data: {
+                  name: personName,
+                  category,
+                  is_active: true,
+                  visit_count: 0,
+                  embedding_count: 0
+                }
+              });
+            }
+            
+            // Сохраняем фото и эмбеддинг через существующую функцию
+            const saveResult = await addEmbeddingToPerson(
+              person.id,
+              person.name,
+              person.category,
+              item.output_path.replace(/^\/?/, ''), // Убрать начальный слэш если есть
+              item.embedding
+            );
+            
+            if (saveResult.success) {
+              createdCount++;
+              createdList.push({
+                name: personName,
+                position: req.body.position || null,
+                embeddings: 1,
+                photo_path: item.output_path
+              });
+              
+              // Обновляем количество эмбеддингов у персоны
+              await prisma.person.update({
+                where: { id: person.id },
+                data: { embedding_count: { increment: 1 } }
+              });
+              
+              // Создаем запись PersonPhoto
+              await prisma.personPhoto.create({
+                data: {
+                  person_id: person.id,
+                  photo_path: item.output_path.replace(/^\/?/, ''),
+                  is_primary: person.photos.length === 0,
+                  has_embedding: true,
+                  source: 'bulk_import'
+                }
+              });
+              
+              if (person.photos.length === 0) {
+                await prisma.person.update({
+                  where: { id: person.id },
+                  data: { photo_path: item.output_path.replace(/^\/?/, '') }
+                });
+              }
+            } else {
+              failedCount++;
+              logError(`Failed to save embedding for ${item.output_path}: ${saveResult.error}`);
+            }
+          } catch (err: any) {
+            failedCount++;
+            logError(`Error processing item ${item.original_file || 'unknown'}: ${err.message}`);
+          }
+        }
+      }
+      
+      // 6. Обновляем статус задачи
+      job.status = 'completed';
+      job.progress = files.length;
+      job.created = createdList;
+      job.failed = [];
+      job.skipped = [];
+      job.summary = {
+        total_processed: intakeResult.photos_processed,
+        passed: createdCount,
+        failed: failedCount,
+        duplicates_skipped: intakeResult.photos_duplicate || 0
+      };
+      
+      // 7. Очистка временной папки
+      try {
+        fs.rmSync(tempFolder, { recursive: true, force: true });
+      } catch (e: any) {
+        logWarn(`Failed to cleanup temp folder ${tempFolder}: ${e.message}`);
+      }
+      
+    } catch (error: any) {
+      logError(`Bulk import job ${jobId} failed: ${error.message}`);
+      job.status = 'failed';
+      job.error = error.message;
+      job.failed = [{ file: 'batch', error: error.message }];
+      
+      // Очистка временной папки
+      try {
+        fs.rmSync(tempFolder, { recursive: true, force: true });
+      } catch (e: any) {
+        logWarn(`Failed to cleanup temp folder ${tempFolder}: ${e.message}`);
+      }
+    }
+  }, 100);
 });
 
 app.get(["/api/persons/bulk_import/:job_id", "/api/persons/bulk_import/:job_id/"], (req, res) => {
@@ -1758,7 +1891,8 @@ async function enrollPhotoWithGate(
  */
 async function callPythonIntake(
   folder: string,
-  personName: string
+  personName: string,
+  outputDir?: string
 ): Promise<{
   status: string;
   photos_count: number;
@@ -1775,6 +1909,9 @@ async function callPythonIntake(
   const formData = new FormData();
   formData.append("folder", folder);
   formData.append("person_name", personName);
+  if (outputDir) {
+    formData.append("output_dir", outputDir);
+  }
 
   try {
     const response = await fetch(url, {

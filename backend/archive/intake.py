@@ -27,6 +27,8 @@ sys.path.insert(0, str(AI_LIBS_DIR / "insightface-master" / "insightface-master"
 import cv2
 from insightface.app import FaceAnalysis
 from insightface.utils import face_align
+from pathlib import Path
+import os
 
 from .config import MODELS_DIR, DEFAULT_CONFIG
 from .quality import calculate_composite_quality
@@ -69,13 +71,14 @@ class PersonIntakePipeline:
         
         return app
     
-    def process_folder(self, folder_path: str, person_name: str) -> Dict:
+    def process_folder(self, folder_path: str, person_name: str, output_dir: str = None) -> Dict:
         """
         Обработать папку с фото персонала
         
         Args:
             folder_path: путь к папке с фото
             person_name: имя персоны
+            output_dir: путь к папке для сохранения кропов (опционально)
         
         Returns:
             dict с результатами и отчётом
@@ -92,6 +95,13 @@ class PersonIntakePipeline:
         
         if not image_files:
             return {"error": "No image files found", "photos_count": 0}
+        
+        # Создание output_dir если указан
+        if output_dir:
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+        else:
+            output_path = None
         
         report = {
             "folder": str(folder),
@@ -139,21 +149,49 @@ class PersonIntakePipeline:
         selected = self._select_diverse(unique_embeddings, max_count=8)
         report["photos_diversity_selected"] = len(selected)
         
-        # Генерация ч/б-близнецов
+        # Генерация ч/б-близнецов и сохранение кропов
         final_templates = []
+        crop_counter = 0
+        
         for emb in selected:
-            final_templates.append({
-                "type": "color",
-                "embedding": emb["emb_color"],
-                "path": emb["path"],
-                "metrics": emb["metrics"],
-            })
-            final_templates.append({
-                "type": "bw_twin",
-                "embedding": emb["emb_bw"],
-                "path": emb["path"],
-                "metrics": emb["metrics"],
-            })
+            # Сохранение цветного кропа
+            if output_path:
+                crop_color = self._save_crop(emb["path"], emb["emb_color"], output_path, person_name, crop_counter, is_bw=False)
+                final_templates.append({
+                    "type": "color",
+                    "embedding": emb["emb_color"],
+                    "output_path": crop_color,
+                    "original_file": str(Path(emb["path"]).name),
+                    "is_bw_twin": False,
+                })
+                crop_counter += 1
+            
+            # Сохранение ч/б-близнеца
+            if output_path:
+                crop_bw = self._save_crop(emb["path"], emb["emb_bw"], output_path, person_name, crop_counter, is_bw=True)
+                final_templates.append({
+                    "type": "bw_twin",
+                    "embedding": emb["emb_bw"],
+                    "output_path": crop_bw,
+                    "original_file": str(Path(emb["path"]).name),
+                    "is_bw_twin": True,
+                })
+                crop_counter += 1
+            else:
+                # Если output_dir не указан, просто добавляем эмбеддинги без путей
+                final_templates.append({
+                    "type": "color",
+                    "embedding": emb["emb_color"],
+                    "original_file": str(Path(emb["path"]).name),
+                    "is_bw_twin": False,
+                })
+                final_templates.append({
+                    "type": "bw_twin",
+                    "embedding": emb["emb_bw"],
+                    "original_file": str(Path(emb["path"]).name),
+                    "is_bw_twin": True,
+                })
+            
             report["bw_twin_generated"] += 1
         
         report["embeddings_generated"] = len(final_templates)
@@ -162,6 +200,65 @@ class PersonIntakePipeline:
         report["status"] = "completed" if len(final_templates) >= 2 else "failed"
         
         return report
+    
+    def _save_crop(self, original_path: str, embedding: np.ndarray, output_dir: Path, person_name: str, counter: int, is_bw: bool) -> str:
+        """
+        Сохранить кроп из оригинального изображения
+        
+        Args:
+            original_path: путь к оригинальному файлу
+            embedding: эмбеддинг (для именования)
+            output_dir: директория для сохранения
+            person_name: имя персоны
+            counter: счётчик для уникальности
+            is_bw: является ли ч/б-близнецом
+        
+        Returns:
+            относительный путь к сохранённому файлу
+        """
+        try:
+            # Загрузить оригинальное изображение
+            pil_img = Image.open(original_path)
+            if pil_img.mode in ('CMYK', 'P', 'RGBA', 'LA'):
+                pil_img = pil_img.convert('RGB')
+            pil_img = ImageOps.exif_transpose(pil_img)
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            
+            # Получить лицо через FaceAnalysis
+            faces = self.app.get(img)
+            if len(faces) == 0:
+                return ""
+            
+            face = faces[0]
+            
+            # Получить выровненный crop
+            crop = face_align.norm_crop(img, face.kps).copy()
+            
+            # Если это ч/б-близнец, конвертировать в градации серого
+            if is_bw:
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                crop = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            
+            # Именование: personname_index_color.jpg или personname_index_bw.jpg
+            safe_name = person_name.replace(" ", "_").replace("-", "_")
+            ext = Path(original_path).suffix
+            suffix = "_bw" if is_bw else "_color"
+            output_filename = f"{safe_name}_{counter}{suffix}{ext}"
+            output_path = output_dir / output_filename
+            
+            # Сохранить
+            cv2.imwrite(str(output_path), crop)
+            
+            # Вернуть относительный путь (относительно public/)
+            rel_path = str(output_path.relative_to(Path(__file__).parent.parent.parent / "public"))
+            if not rel_path.startswith('/'):
+                rel_path = '/' + rel_path
+            
+            return rel_path
+            
+        except Exception as e:
+            print(f"Error saving crop: {e}")
+            return ""
     
     def _process_single_image(self, img_path: Path, person_name: str) -> Dict:
         """Обработать одно фото"""
@@ -420,7 +517,8 @@ def create_intake_app(prisma_client=None) -> "FastAPI":
     async def intake_folder(
         folder: str = Form(...),
         person_id: Optional[int] = Form(None),
-        person_name: Optional[str] = Form(None)
+        person_name: Optional[str] = Form(None),
+        output_dir: Optional[str] = Form(None)
     ):
         """
         Обработка папки с фото персонала
@@ -429,12 +527,13 @@ def create_intake_app(prisma_client=None) -> "FastAPI":
             folder: путь к папке с фото
             person_id: ID существующей персоны (опционально)
             person_name: имя персоны (если person_id не указан)
+            output_dir: путь к папке для сохранения кропов (опционально)
         
         Returns:
             dict с результатами обработки
         """
         try:
-            result = pipeline.process_folder(folder, person_name or "Unknown")
+            result = pipeline.process_folder(folder, person_name or "Unknown", output_dir)
             # Преобразование ndarray в list для JSON сериализации
             result = _convert_to_serializable(result)
             return JSONResponse(content=result)

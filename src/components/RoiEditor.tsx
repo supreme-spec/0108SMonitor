@@ -51,6 +51,7 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
   const [startPt, setStartPt] = useState({ x: 0, y: 0 })
   const [currentRect, setCurrentRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [cameraLoading, setCameraLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [newLabel, setNewLabel] = useState('Зона 1')
@@ -68,6 +69,28 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
   } | null>(null)
 
   // ── Load snapshot + existing zones ────────────────────────────────────────
+
+  // Проверяем статус камеры перед загрузкой снимка
+  useEffect(() => {
+    const loadCameraStatus = async () => {
+      try {
+        const cams = await apiFetch<any[]>(`/cameras`)
+        const cam = cams.find(c => c.id === cameraId)
+        if (!cam) {
+          setError('Камера не найдена')
+        } else if (!cam.is_active) {
+          setError('Камера отключена. Включите камеру в настройках перед настройкой зон.')
+        } else if (cam.status && cam.status !== 'online') {
+          setError(`Камера недоступна: ${cam.status.replace('error:', '')}. FFmpeg не может подключиться к потоку.`)
+        }
+      } catch {
+        setError('Не удалось загрузить информацию о камере')
+      } finally {
+        setCameraLoading(false)
+      }
+    }
+    loadCameraStatus()
+  }, [cameraId])
 
   const loadSnapshot = useCallback(async () => {
     setLoading(true)
@@ -102,9 +125,11 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
   }, [cameraId])
 
   useEffect(() => {
-    loadSnapshot()
-    loadZones()
-  }, [loadSnapshot, loadZones])
+    if (!cameraLoading) {
+      loadSnapshot()
+      loadZones()
+    }
+  }, [loadSnapshot, loadZones, cameraLoading])
 
   // ── Compute canvas size to fit container ──────────────────────────────────
 
@@ -309,21 +334,27 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
 
         {/* Canvas area */}
         <div ref={containerRef} className="flex-1 overflow-auto px-5 pt-4 min-h-0">
+          {cameraLoading ? (
+            <div className="flex items-center justify-center h-48 text-kraken-muted gap-2">
+              <RefreshCw size={16} className="animate-spin" />
+              Проверка камеры...
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center h-48 gap-3">
+              <p className="text-kraken-red text-sm">{error}</p>
+              <button onClick={onClose} className="btn-ghost text-xs">
+                Закрыть
+              </button>
+            </div>
+          ) : (
+          <>
           {loading && (
             <div className="flex items-center justify-center h-48 text-kraken-muted gap-2">
               <RefreshCw size={16} className="animate-spin" />
               Загрузка снимка...
             </div>
           )}
-          {!loading && error && (
-            <div className="flex flex-col items-center justify-center h-48 gap-3">
-              <p className="text-kraken-red text-sm">{error}</p>
-              <button onClick={loadSnapshot} className="btn-ghost text-xs flex items-center gap-1">
-                <RefreshCw size={12} /> Повторить
-              </button>
-            </div>
-          )}
-          {!loading && !error && bgImage && canvasW > 0 && (
+          {!loading && !error && (
             <div className="flex flex-col items-center gap-2">
               <p className="text-kraken-muted text-xs self-start">
                 Нарисуйте прямоугольник мышью — детектор будет работать только внутри зон.
@@ -342,9 +373,8 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
               />
             </div>
           )}
-        </div>
 
-        {/* Zone list + controls */}
+          {/* Zone list + controls */}
         <div className="px-5 py-4 border-t border-kraken-border flex-shrink-0 space-y-3">
 
           {/* New zone label input */}
@@ -413,6 +443,8 @@ export default function RoiEditor({ cameraId, cameraName, onClose }: Props) {
               {saving ? 'Сохранение...' : 'Сохранить'}
             </button>
           </div>
+          </div>
+          </>) }
         </div>
       </div>
 
