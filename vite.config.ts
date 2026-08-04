@@ -14,6 +14,7 @@ export default defineConfig(() => {
     },
 
     server: {
+      host: '0.0.0.0',
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {
         // Игнорируем постоянно меняющиеся логи/билды, чтобы не дёргать HMR лишний раз

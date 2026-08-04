@@ -737,7 +737,7 @@ app.post(["/api/webhook/unv/:secret", "/api/webhook/unv/:secret/"], unvWebhookUp
             person_category: matchedPerson.category,
             person_photo_path: matchedPerson.photo_path,
             needs_operator_confirmation: !meetsVerification,
-            confirmation_status: !meetsVerification ? "pending" : null,
+    confirmation_status: !meetsVerification ? "pending" : undefined,
           },
         });
 
@@ -1490,7 +1490,7 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
       // Вызов Python intake
       const intakeRes = await fetch(`${process.env.PYTHON_INTAKE_URL || 'http://localhost:8001'}/intake`, {
         method: 'POST',
-        body: form,
+        body: form as any,
       });
 
       if (!intakeRes.ok) {
@@ -1521,7 +1521,7 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
           try {
             // Находим или создаём персону
             let person = await prisma.person.findFirst({
-              where: { name: { equals: personName, mode: 'insensitive' } }
+              where: { name: { equals: personName } }
             });
             
             if (!person) {
@@ -1535,6 +1535,9 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
                 }
               });
             }
+            
+            // Считаем существующие фото для определения primary
+            const photoCount = await prisma.personPhoto.count({ where: { person_id: person.id } });
             
             // Сохраняем фото и эмбеддинг через существующую функцию
             const saveResult = await addEmbeddingToPerson(
@@ -1565,13 +1568,13 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
                 data: {
                   person_id: person.id,
                   photo_path: item.output_path.replace(/^\/?/, ''),
-                  is_primary: person.photos.length === 0,
+                  is_primary: photoCount === 0,
                   has_embedding: true,
                   source: 'bulk_import'
                 }
               });
               
-              if (person.photos.length === 0) {
+              if (photoCount === 0) {
                 await prisma.person.update({
                   where: { id: person.id },
                   data: { photo_path: item.output_path.replace(/^\/?/, '') }
@@ -1645,7 +1648,7 @@ app.post(["/api/persons/:id/photos", "/api/persons/:id/photos/"], upload.any(), 
     if (req.file) files.push(req.file);
     if (req.files && Array.isArray(req.files)) files = files.concat(req.files as Express.Multer.File[]);
     if (files.length === 0) {
-      return res.status(400).json({ detail: "No file uploaded", added_embeddings: 0, total_embeddings: person.photos.length });
+      return res.status(400).json({ detail: "No file uploaded", added_embeddings: 0, total_embeddings: (person as any).photos.length });
     }
 
     let added_embeddings = 0;
@@ -3325,7 +3328,7 @@ async function handleRecognizedEvent(cam: any, match: any, frameBase64: string) 
     person_category: match.category,
     person_photo_path: person?.photo_path,
     needs_operator_confirmation: !meetsVerification,
-    confirmation_status: !meetsVerification ? "pending" : null,
+    confirmation_status: !meetsVerification ? "pending" : undefined,
   });
 
   triggerSmartRecording(cam);
