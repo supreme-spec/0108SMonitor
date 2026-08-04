@@ -15,7 +15,7 @@ import { FormData } from "formdata-node";
 
 const execAsync = promisify(exec);
 import sharp from "sharp";
-import * as archiverLib from "archiver";
+import { ZipArchive } from "archiver";
 import * as unzipper from "unzipper";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
@@ -4323,9 +4323,7 @@ app.post(["/api/backup", "/api/backup/"], async (req, res) => {
 
     // Создаём ZIP архив с БД и медиафайлами
     const output = fs.createWriteStream(backupPath);
-    const archive = (archiverLib as any).default
-      ? (archiverLib as any).default("zip", { zlib: { level: 6 } })
-      : (archiverLib as any)("zip", { zlib: { level: 6 } });
+    const archive = new ZipArchive({ zlib: { level: 6 } });
 
     await new Promise<void>((resolve, reject) => {
       output.on("close", resolve);
