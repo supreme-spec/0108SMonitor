@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Square, Trash2, Search, X, Wifi, WifiOff, RefreshCw, ScanLine, Edit2, Video } from 'lucide-react'
+import { Plus, Play, Square, Trash2, X, Wifi, WifiOff, RefreshCw, ScanLine, Edit2, Video } from 'lucide-react'
 import type { Camera } from '../types'
 import { apiFetch } from '../api/client'
 import RoiEditor from '../components/RoiEditor'
@@ -138,26 +138,6 @@ export default function Cameras() {
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={handleScanUSB} disabled={scanning} className="btn-ghost flex items-center gap-2">
-          <Search size={14} />
-          {scanning ? 'Сканирование USB...' : 'Найти USB'}
-        </button>
-
-        <div className="flex items-center gap-2">
-          <button onClick={handleScanONVIF} disabled={onvifScanning} className="btn-ghost flex items-center gap-2">
-            <Wifi size={14} />
-            {onvifScanning ? 'Сканирование сети...' : 'Найти IP/ONVIF'}
-          </button>
-          <input
-            type="text"
-            value={onvifNetwork}
-            onChange={e => setOnvifNetwork(e.target.value)}
-            placeholder="192.168.1"
-            className="w-28 bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
-            title="Подсеть для сканирования (например 192.168.0)"
-          />
-        </div>
-
         <button
           onClick={() => { setPrefillSource(''); setPrefillType('USB'); setPrefillName(''); setShowAdd(true) }}
           className="btn-primary flex items-center gap-2 ml-auto"

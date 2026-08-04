@@ -111,6 +111,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    """Gracefully shut down the FAISS serial executor on server exit."""
+    await faiss_executor.shutdown()
+
 # ─── Global State ─────────────────────────────────────────────────────────────
 
 face_app = None
@@ -120,6 +126,68 @@ used_provider = "CPUExecutionProvider"
 faiss_index: Optional[faiss.IndexFlatIP] = None
 faiss_index_id_to_person: List[Dict[str, Any]] = []
 faiss_lock = threading.Lock()
+
+
+class FaissSerialExecutor:
+    """
+    Serial executor for FAISS operations.
+
+    Uses an asyncio.Queue to ensure all operations are executed sequentially
+    in a dedicated background task. This prevents:
+    - Race conditions between search() and rebuild()
+    - Segfaults with GPU FAISS (CUDA context is thread-bound)
+    - Event loop blocking on large index rebuild
+
+    All callers must `await` the result. Operations are queued and processed
+    one at a time by a single worker task.
+    """
+
+    def __init__(self):
+        self._queue: Optional[asyncio.Queue] = None
+        self._worker_task: Optional[asyncio.Task] = None
+
+    async def _ensure_worker(self):
+        """Lazily start the background worker on first use."""
+        if self._worker_task is not None:
+            return
+        self._queue = asyncio.Queue()
+        self._worker_task = asyncio.create_task(self._worker())
+
+    async def _worker(self):
+        """Background worker that processes FAISS operations serially."""
+        while True:
+            item = await self._queue.get()
+            if item is None:
+                break
+            op, args, kwargs, future = item
+            try:
+                result = await asyncio.to_thread(op, *args, **kwargs)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+            finally:
+                self._queue.task_done()
+
+    async def submit(self, op, *args, **kwargs):
+        """Submit a synchronous FAISS operation for serial execution."""
+        await self._ensure_worker()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        await self._queue.put((op, args, kwargs, future))
+        return await future
+
+    async def shutdown(self):
+        """Gracefully shut down the worker."""
+        if self._queue is not None:
+            await self._queue.put(None)
+        if self._worker_task is not None:
+            await self._worker_task
+        self._worker_task = None
+        self._queue = None
+
+
+# Singleton executor instance
+faiss_executor = FaissSerialExecutor()
 
 last_recognition_time: Dict[str, float] = {}
 cooldown_lock = threading.Lock()
@@ -300,6 +368,23 @@ def get_faiss_matches(query_vector: np.ndarray, top_k: int = 5) -> List[Dict[str
         })
     return results
 
+
+# ─── Async wrappers via FaissSerialExecutor ─────────────────────────────────
+
+async def search_faiss_async(query_vector: np.ndarray, top_k: int = 5) -> List[Dict[str, Any]]:
+    """Searches the FAISS index via the serial executor. Thread-safe."""
+    return await faiss_executor.submit(get_faiss_matches, query_vector, top_k=top_k)
+
+
+async def rebuild_faiss_index_async(descriptors: List[Dict[str, Any]]) -> None:
+    """Rebuilds the FAISS index via the serial executor. Thread-safe."""
+    await faiss_executor.submit(_build_faiss_index, descriptors)
+
+
+def get_faiss_ntotal() -> int:
+    """Thread-safe read of the index size."""
+    with faiss_lock:
+        return faiss_index.ntotal if faiss_index is not None else 0
 # ─── SQLite Auto-Load ─────────────────────────────────────────────────────────
 
 def load_descriptors_from_sqlite(db_path: str = DB_PATH) -> List[Dict[str, Any]]:
@@ -702,7 +787,7 @@ async def get_status() -> Dict[str, Any]:
         "initialized": is_initialized,
         "backend": "insightface" if is_initialized else "demo",
         "provider": used_provider,
-        "faiss_vectors": faiss_index.ntotal if faiss_index is not None else 0,
+        "faiss_vectors": get_faiss_ntotal(),
         "frame_skip": FRAME_SKIP,
         "min_det_score": MIN_DETECTION_SCORE,
         "min_face_size": MIN_FACE_SIZE,
@@ -774,9 +859,9 @@ async def get_health() -> Dict[str, Any]:
     result["gpu_available"] = gpu_available
     result["gpu_provider"] = used_provider if is_initialized else None
     
-    # AI Modules status - with detailed installed/loaded/active info
+    # AI Modules status - honest checks based on actual module availability
     modules: Dict[str, Any] = {}
-    
+
     # Load ai_config to get active modules
     ai_config_path = Path(__file__).parent / "ai_config.json"
     active_config = {"detector": "scrfd", "recognizer": "arcface", "tracker": "none"}
@@ -787,87 +872,128 @@ async def get_health() -> Dict[str, Any]:
                 active_config = config.get("active", active_config)
         except Exception:
             pass
-    
-    # SCRFD
+
+    # Проверяем статус модулей, инстанцируя их и читая info.status
+    _module_status_cache: Dict[str, bool] = {}
+
+    def _check_module_installed(module_path: str, class_name: str) -> bool:
+        """Проверяет, установлен ли модуль, импортируя и инстанцируя его."""
+        if module_path in _module_status_cache:
+            return _module_status_cache[module_path]
+        try:
+            from backend.ai.base import ModuleStatus as _MS
+            mod = __import__(module_path, fromlist=[class_name])
+            cls = getattr(mod, class_name)
+            instance = cls()
+            result = instance.info.status != _MS.NOT_INSTALLED
+        except Exception:
+            result = False
+        _module_status_cache[module_path] = result
+        return result
+
+    def _module_status(installed: bool, active: bool) -> str:
+        """Вычисляет статус модуля для UI: 'ok', 'pending', 'error'."""
+        if not installed:
+            return "error"
+        return "ok" if active else "pending"
+
+    # SCRFD — использует InsightFace buffalo_l (det_10g.onnx)
+    scrfd_installed = is_initialized
     modules["scrfd"] = {
-        "installed": True,  # Код есть
-        "loaded": active_config.get("detector") == "scrfd",
-        "active": active_config.get("detector") == "scrfd",
-        "version": "10GF",
-        "provider": "CUDA",
-        "description": "SCRFD детектор"
+        "installed": scrfd_installed,
+        "loaded": active_config.get("detector") == "scrfd" and scrfd_installed,
+        "active": active_config.get("detector") == "scrfd" and scrfd_installed,
+        "status": _module_status(scrfd_installed, scrfd_installed and active_config.get("detector") == "scrfd"),
+        "version": "10GF" if scrfd_installed else None,
+        "provider": "CUDA" if scrfd_installed else None,
+        "description": "SCRFD детектор от InsightFace (buffalo_l)",
+        "weight_file": "models/buffalo_l/det_10g.onnx",
     }
-    
-    # YOLO-Face
+
+    # YOLO-Face — пока не реализован (TODO в исходнике)
+    yoloface_installed = _check_module_installed("backend.ai.detectors.yoloface", "YOLOFace")
     modules["yoloface"] = {
-        "installed": True,  # Код есть
-        "loaded": active_config.get("detector") == "yoloface",
-        "active": active_config.get("detector") == "yoloface",
-        "version": None,
-        "provider": "GPU",
-        "description": "YOLO-Face детектор"
+        "installed": yoloface_installed,
+        "loaded": active_config.get("detector") == "yoloface" and yoloface_installed,
+        "active": active_config.get("detector") == "yoloface" and yoloface_installed,
+        "status": _module_status(yoloface_installed, yoloface_installed and active_config.get("detector") == "yoloface"),
+        "version": "v8" if yoloface_installed else None,
+        "provider": "GPU" if yoloface_installed else None,
+        "description": "YOLO-Face детектор (YOLOv8)",
     }
-    
-    # RetinaFace
+
+    # RetinaFace — пока не реализован (TODO в исходнике)
+    retinaface_installed = _check_module_installed("backend.ai.detectors.retinaface", "RetinaFace")
     modules["retinaface"] = {
-        "installed": True,  # Код есть
-        "loaded": active_config.get("detector") == "retinaface",
-        "active": active_config.get("detector") == "retinaface",
-        "version": None,
-        "provider": "GPU",
-        "description": "RetinaFace детектор"
+        "installed": retinaface_installed,
+        "loaded": active_config.get("detector") == "retinaface" and retinaface_installed,
+        "active": active_config.get("detector") == "retinaface" and retinaface_installed,
+        "status": _module_status(retinaface_installed, retinaface_installed and active_config.get("detector") == "retinaface"),
+        "version": "0.1" if retinaface_installed else None,
+        "provider": "GPU" if retinaface_installed else None,
+        "description": "RetinaFace детектор (Multi-scale)",
     }
-    
-    # ArcFace
+
+    # ArcFace — использует InsightFace buffalo_l (w600k_r50.onnx)
+    arcface_installed = is_initialized
     modules["arcface"] = {
-        "installed": True,  # Код есть
-        "loaded": active_config.get("recognizer") == "arcface",
-        "active": active_config.get("recognizer") == "arcface",
-        "version": "buffalo_l",
-        "provider": "CUDA",
-        "description": "ArcFace алгоритм распознавания"
+        "installed": arcface_installed,
+        "loaded": active_config.get("recognizer") == "arcface" and arcface_installed,
+        "active": active_config.get("recognizer") == "arcface" and arcface_installed,
+        "status": _module_status(arcface_installed, arcface_installed and active_config.get("recognizer") == "arcface"),
+        "version": "buffalo_l" if arcface_installed else None,
+        "provider": "CUDA" if arcface_installed else None,
+        "description": "ArcFace алгоритм распознавания (buffalo_l)",
+        "weight_file": "models/buffalo_l/w600k_r50.onnx",
     }
-    
-    # AdaFace
+
+    # AdaFace — не реализован
     modules["adaface"] = {
-        "installed": True,  # Код есть
-        "loaded": active_config.get("recognizer") == "adaface",
-        "active": active_config.get("recognizer") == "adaface",
+        "installed": False,
+        "loaded": False,
+        "active": False,
+        "status": "error",
         "version": None,
-        "provider": "CPU",
-        "description": "AdaFace алгоритм распознавания"
+        "provider": None,
+        "description": "AdaFace алгоритм распознавания — не реализован",
     }
-    
-    # FAISS
+
+    # FAISS — импортирован на уровне модуля
+    _faiss_active = get_faiss_ntotal() > 0
     modules["faiss"] = {
         "installed": True,
         "loaded": True,
-        "active": faiss_index is not None,
+        "active": _faiss_active,
+        "status": _module_status(True, _faiss_active),
         "version": "1.11.0",
         "provider": "CPU/GPU",
-        "description": "FAISS векторная база данных"
+        "description": "FAISS векторная база данных",
     }
-    
-    # ByteTrack
+
+    # ByteTrack — пока не реализован
+    bytetrack_installed = _check_module_installed("backend.ai.trackers.bytetrack", "ByteTrack")
     modules["bytetrack"] = {
-        "installed": True,
-        "loaded": active_config.get("tracker") == "bytetrack",
-        "active": active_config.get("tracker") == "bytetrack",
-        "version": "1.0",
-        "provider": "CPU",
-        "description": "ByteTrack трекинг"
+        "installed": bytetrack_installed,
+        "loaded": active_config.get("tracker") == "bytetrack" and bytetrack_installed,
+        "active": active_config.get("tracker") == "bytetrack" and bytetrack_installed,
+        "status": _module_status(bytetrack_installed, bytetrack_installed and active_config.get("tracker") == "bytetrack"),
+        "version": "1.0" if bytetrack_installed else None,
+        "provider": "CPU" if bytetrack_installed else None,
+        "description": "ByteTrack трекинг",
     }
-    
-    # BoT-SORT
+
+    # BoT-SORT — пока не реализован
+    botsort_installed = _check_module_installed("backend.ai.trackers.botsort", "BoTSORT")
     modules["botsort"] = {
-        "installed": True,
-        "loaded": active_config.get("tracker") == "botsort",
-        "active": active_config.get("tracker") == "botsort",
-        "version": "1.0",
-        "provider": "CPU",
-        "description": "BoT-SORT трекинг"
+        "installed": botsort_installed,
+        "loaded": active_config.get("tracker") == "botsort" and botsort_installed,
+        "active": active_config.get("tracker") == "botsort" and botsort_installed,
+        "status": _module_status(botsort_installed, botsort_installed and active_config.get("tracker") == "botsort"),
+        "version": "1.0" if botsort_installed else None,
+        "provider": "CPU" if botsort_installed else None,
+        "description": "BoT-SORT трекинг",
     }
-    
+
     result["modules"] = modules
     
     return result
@@ -1412,7 +1538,7 @@ async def recognize(
             return {"matches": [], "status": "no_embedding"}
 
         embedding = np.array(primary_face.embedding, dtype=np.float32)
-        candidates = get_faiss_matches(embedding, top_k=top_k)
+        candidates = await search_faiss_async(embedding, top_k=top_k)
         effective_threshold = threshold if threshold is not None else RECOGNITION_THRESHOLD
 
         matches: List[Dict[str, Any]] = []
@@ -1462,7 +1588,7 @@ async def recognize(
         response = {
             "matches": matches[:top_k],
             "status": "ok" if matches else ("needs_confirmation" if needs_confirmation_data else "unknown"),
-            "total_vectors": faiss_index.ntotal if faiss_index is not None else 0,
+            "total_vectors": get_faiss_ntotal(),
             "best_similarity": best_sim,
             "gender": ("male" if getattr(primary_face, "gender", None) == 0 else "female") if hasattr(primary_face, "gender") and primary_face.gender is not None else None,
             "age": int(primary_face.age) if hasattr(primary_face, "age") and primary_face.age is not None else None,
@@ -1510,7 +1636,7 @@ async def recognize_by_descriptor(
         if embedding.size == 0:
             raise HTTPException(status_code=400, detail="Empty descriptor")
 
-        candidates = get_faiss_matches(embedding, top_k=top_k)
+        candidates = await search_faiss_async(embedding, top_k=top_k)
         effective_threshold = threshold if threshold is not None else RECOGNITION_THRESHOLD
 
         matches: List[Dict[str, Any]] = []
@@ -1560,7 +1686,7 @@ async def recognize_by_descriptor(
         response = {
             "matches": matches[:top_k],
             "status": "ok" if matches else ("needs_confirmation" if needs_confirmation_data else "unknown"),
-            "total_vectors": faiss_index.ntotal if faiss_index is not None else 0,
+            "total_vectors": get_faiss_ntotal(),
             "best_similarity": best_sim,
         }
 
@@ -1585,14 +1711,14 @@ async def update_index(payload: Dict[str, Any]):
     try:
         persons = payload.get("persons", [])
         if not persons:
-            _build_faiss_index([])
+            await rebuild_faiss_index_async([])
             return {"status": "ok", "indexed": 0}
 
-        _build_faiss_index(persons)
+        await rebuild_faiss_index_async(persons)
         return {
             "status": "ok",
             "indexed": len(persons),
-            "total_vectors": faiss_index.ntotal if faiss_index is not None else 0,
+            "total_vectors": get_faiss_ntotal(),
         }
     except Exception as e:
         logger.error(f"Index update error: {e}")

@@ -181,7 +181,8 @@ export default function ProjectionPanel({
   const remoteUrl = activeScreen
     ? buildUrl(activeScreen).replace(window.location.origin, `http://${currentHost}:${port}`)
     : ''
-  const backendUrl = `http://${currentHost}:8000`
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const backendUrl = window.location.origin
 
   const copyUrl = (url: string) => {
     navigator.clipboard.writeText(url).then(() => {
@@ -531,13 +532,13 @@ export default function ProjectionPanel({
                     <div>
                       <div className="text-kraken-disabled text-[10px] mb-0.5">Алерты и события:</div>
                       <code className="block bg-kraken-base text-kraken-blue text-[11px] px-2 py-1.5 rounded-lg font-mono break-all">
-                        ws://{currentHost}:8000/ws/security
+                        {wsProtocol}//{window.location.host}/ws/security
                       </code>
                     </div>
                     <div>
                       <div className="text-kraken-disabled text-[10px] mb-0.5">Видеопоток камеры {activeScreen?.cameraId}:</div>
                       <code className="block bg-kraken-base text-kraken-blue text-[11px] px-2 py-1.5 rounded-lg font-mono break-all">
-                        ws://{currentHost}:8000/ws/camera/{activeScreen?.cameraId}
+                        {wsProtocol}//{window.location.host}/ws/camera/{activeScreen?.cameraId}
                       </code>
                     </div>
                   </div>
@@ -573,7 +574,7 @@ export default function ProjectionPanel({
 
                 <div className="bg-kraken-purple/10 border border-kraken-purple/30 rounded-xl p-3">
                   <p className="text-kraken-purple text-xs leading-relaxed">
-                    💡 Брандмауэр Windows: разрешите входящие на порты 3000 и 8000, или оба устройства в одной Wi-Fi сети.
+                    💡 Брандмауэр Windows: разрешите входящие на порт 3000, или оба устройства в одной Wi-Fi сети.
                   </p>
                 </div>
               </>

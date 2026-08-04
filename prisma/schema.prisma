@@ -1,5 +1,3 @@
-// This is your Prisma schema file
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,46 +8,53 @@ datasource db {
 }
 
 model Camera {
-  id                   Int       @id @default(autoincrement())
+  id                   Int         @id @default(autoincrement())
   name                 String
   source               String
-  camera_type          String    @default("USB") // USB, ONVIF, RTSP, Hikvision, UNV
+  camera_type          String      @default("USB")
   zone                 String?
-  is_active            Boolean   @default(true)
-  created_at           DateTime  @default(now())
-  status               String    @default("offline")
-  roi_zones            String?   // JSON string
-  fps                  Int       @default(25)
-  ping_ms              Int       @default(0)
-  is_smart_recording   Boolean   @default(false)
-  is_chronicle         Boolean   @default(true)
+  is_active            Boolean     @default(true)
+  created_at           DateTime    @default(now())
+  status               String      @default("offline")
+  roi_zones            String?
+  fps                  Int         @default(25)
+  ping_ms              Int         @default(0)
+  is_smart_recording   Boolean     @default(false)
+  is_chronicle         Boolean     @default(true)
   driver_type          String?
   ip_address           String?
   ip_port              Int?
   username             String?
   password             String?
-  use_camera_analytics Boolean   @default(false)
-  
-  events               Event[]
+   use_camera_analytics Boolean   @default(false)
+   enabled_modules      String      @default("face")
+   motion_threshold     Float?      @default(0.62)
+   motion_zones         String?
+   lpr_enabled          Boolean     @default(false)
+   lpr_regions          String?
+   exclusion_zones      String?
+   webhookSecret        String?   @unique // UNV LAPI webhook authentication secret
+   
+   events               Event[]
   recordings           Recording[]
 }
 
 model Category {
-  id             Int       @id @default(autoincrement())
-  code           String    @unique
+  id             Int     @id @default(autoincrement())
+  code           String  @unique
   label          String
   color          String
   bg_color       String
-  is_alert       Boolean   @default(false)
-  alert_sound    String    @default("off")
-  alert_volume   Float     @default(0.5)
-  detect_enabled Boolean   @default(true)
-  sort_order     Int       @default(100)
-  is_system      Boolean   @default(false)
+  is_alert       Boolean @default(false)
+  alert_sound    String  @default("off")
+  alert_volume   Float   @default(0.5)
+  detect_enabled Boolean @default(true)
+  sort_order     Int     @default(100)
+  is_system      Boolean @default(false)
 }
 
 model Person {
-  id              Int               @id @default(autoincrement())
+  id              Int                @id @default(autoincrement())
   name            String
   category        String
   position        String?
@@ -61,31 +66,29 @@ model Person {
   organization    String?
   extra_info      String?
   photo_path      String?
-  is_active       Boolean           @default(true)
-  created_at      DateTime          @default(now())
+  is_active       Boolean            @default(true)
+  created_at      DateTime           @default(now())
   last_seen_at    DateTime?
-  visit_count     Int               @default(0)
-  embedding_count Int               @default(0)
-  
-  photos          PersonPhoto[]
-  confirmations   FaceConfirmation[]
-  events          Event[]
-  incidents       Incident[]
-  tags            Tag[]
-  descriptors     FaceDescriptor[]
-  policies        PersonPolicy[]
+  visit_count     Int                @default(0)
+  embedding_count Int                @default(0)
   episode_persons EpisodePerson[]
+  events          Event[]
+  descriptors     FaceDescriptor[]
+  incidents       Incident[]
+  policies        PersonPolicy[]
+  tags            Tag[]
+  confirmations   FaceConfirmation[]
+  photos          PersonPhoto[]
 }
 
 model FaceDescriptor {
-  id          Int       @id @default(autoincrement())
-  person_id   Int
-  photo_path  String
-  descriptor  String    // JSON array of floats
-  created_at  DateTime  @default(now())
-  
-  person      Person    @relation(fields: [person_id], references: [id], onDelete: Cascade)
-  
+  id         Int      @id @default(autoincrement())
+  person_id  Int
+  photo_path String
+  descriptor String
+  created_at DateTime @default(now())
+  person     Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
+
   @@index([person_id])
 }
 
@@ -95,10 +98,9 @@ model PersonPhoto {
   photo_path    String
   is_primary    Boolean  @default(false)
   has_embedding Boolean  @default(false)
-  source        String   @default("manual") // manual | confirmation | auto
+  source        String   @default("manual")
   confidence    Float?
   created_at    DateTime @default(now())
-
   person        Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
 
   @@index([person_id])
@@ -113,12 +115,11 @@ model FaceConfirmation {
   existing_photo_path String?
   person_name         String?
   category            String?
-  status              String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  status              String    @default("PENDING")
   created_at          DateTime  @default(now())
   confirmed_at        DateTime?
   confirmed_by        String?
   rejected_reason     String?
-
   person              Person    @relation(fields: [person_id], references: [id], onDelete: Cascade)
 
   @@index([status])
@@ -127,7 +128,7 @@ model FaceConfirmation {
 }
 
 model Event {
-  id                          Int       @id @default(autoincrement())
+  id                          Int      @id @default(autoincrement())
   camera_id                   Int
   camera_name                 String
   person_id                   Int?
@@ -137,13 +138,12 @@ model Event {
   person_name                 String?
   person_category             String?
   person_photo_path           String?
-  created_at                  DateTime  @default(now())
-  needs_operator_confirmation Boolean   @default(false)
+  created_at                  DateTime @default(now())
+  needs_operator_confirmation Boolean  @default(false)
   confirmation_status         String?
-  confirmation_id             Int?      // links to face_confirmations.id when this event was created from an operator-confirmation request
-
-  camera                      Camera    @relation(fields: [camera_id], references: [id], onDelete: Cascade)
-  person                      Person?   @relation(fields: [person_id], references: [id], onDelete: SetNull)
+  confirmation_id             Int?
+  person                      Person?  @relation(fields: [person_id], references: [id])
+  camera                      Camera   @relation(fields: [camera_id], references: [id], onDelete: Cascade)
 
   @@index([camera_id])
   @@index([person_id])
@@ -161,7 +161,6 @@ model Recording {
   size_mb     Float
   video_path  String
   is_favorite Boolean  @default(false)
-  
   camera      Camera   @relation(fields: [camera_id], references: [id], onDelete: Cascade)
 }
 
@@ -173,7 +172,6 @@ model Incident {
   comment       String?
   status        String   @default("open")
   created_at    DateTime @default(now())
-  
   person        Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
 }
 
@@ -181,203 +179,189 @@ model Tag {
   id        Int    @id @default(autoincrement())
   person_id Int
   tag       String
-  
   person    Person @relation(fields: [person_id], references: [id], onDelete: Cascade)
 }
 
-// ============================================
-// ARCHIVE & BATCH PROCESSING MODELS
-// ============================================
-
 /// Контекстные роли персоны (зона/время/тип эпизода)
 model PersonPolicy {
-  id              Int        @id @default(autoincrement())
-  person_id       Int
-  zone_id         Int?
-  zone_name       String?
-  schedule_type   String     @default("default") // default | night | weekend | custom
-  start_time      String?    // HH:MM format
-  end_time        String?    // HH:MM format
-  role            String     @default("unknown") // target | ignore | noise | svita | unknown
-  confidence      Float      @default(0.5) // 0.0-1.0, low_confidence = operator review needed
-  label_source    String     @default("operator") // operator | propagated | auto
-  created_at      DateTime   @default(now())
-  updated_at      DateTime   @default(now())
-  comment         String?
-  
-  person          Person     @relation(fields: [person_id], references: [id], onDelete: Cascade)
-  
-  @@index([person_id])
-  @@index([zone_id])
-  @@index([role])
+  id            Int     @id @default(autoincrement())
+  person_id     Int
+  zone_id       Int?
+  zone_name     String?
+  schedule_type String  @default("default")
+  start_time    String?
+  end_time      String?
+  role          String  @default("unknown")
+  confidence    Float   @default(0.5)
+  label_source  String  @default("operator")
+  created_at    String  @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  updated_at    String  @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  comment       String?
+  person        Person  @relation(fields: [person_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([role], map: "idx_PersonPolicy_role")
+  @@index([zone_id], map: "idx_PersonPolicy_zone_id")
+  @@index([person_id], map: "idx_PersonPolicy_person_id")
 }
 
 /// Эпизод (папка с фото/видео)
 model Episode {
-  id              Int        @id @default(autoincrement())
-  folder_path     String     @unique
+  id              Int             @id @default(autoincrement())
+  folder_path     String          @unique(map: "sqlite_autoindex_Episode_1")
   episode_name    String
-  source_type     String     @default("camera") // camera | enrollment | archive | screen_photo
-  capture_time    DateTime?
+  source_type     String          @default("camera")
+  capture_time    String?
   camera_id       Int?
   camera_name     String?
-  total_photos    Int        @default(0)
-  processed_at    DateTime?
-  status          String     @default("pending") // pending | processing | completed | failed
+  total_photos    Int             @default(0)
+  processed_at    String?
+  status          String          @default("pending")
   error_message   String?
-  created_at      DateTime   @default(now())
-  
-  persons         EpisodePerson[]
+  created_at      String          @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
   photos          ArchivePhoto[]
-  clusters        FaceCluster[]
   clustering_logs ClusteringLog[]
-  
-  @@index([folder_path])
-  @@index([status])
+  persons         EpisodePerson[]
+  clusters        FaceCluster[]
+
+  @@index([status], map: "idx_Episode_status")
+  @@index([folder_path], map: "idx_Episode_folder_path")
 }
 
 /// Связь между эпизодом и персоной (контекстная роль в этом эпизоде)
 model EpisodePerson {
-  id              Int        @id @default(autoincrement())
-  episode_id      Int
-  person_id       Int?
-  person_name     String?    // для неопознанных лиц
-  role            String     @default("unknown") // target | ignore | noise | svita | unknown
-  confidence      Float      @default(0.5)
-  label_source    String     @default("operator") // operator | propagated | auto
-  cluster_id      String?    // ID кластера внутри эпизода
-  is_merge_hint   Boolean    @default(false) // подсказка оператору: возможно один человек
-  created_at      DateTime   @default(now())
-  updated_at      DateTime   @default(now())
-  
-  episode         Episode    @relation(fields: [episode_id], references: [id], onDelete: Cascade)
-  person          Person?    @relation(fields: [person_id], references: [id], onDelete: SetNull)
-  
-  faces           ArchiveFace[]
-  
-  @@index([episode_id])
-  @@index([person_id])
-  @@index([role])
+  id            Int           @id @default(autoincrement())
+  episode_id    Int
+  person_id     Int?
+  person_name   String?
+  role          String        @default("unknown")
+  confidence    Float         @default(0.5)
+  label_source  String        @default("operator")
+  cluster_id    String?
+  is_merge_hint Int           @default(0)
+  created_at    String        @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  updated_at    String        @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  faces         ArchiveFace[]
+  person        Person?       @relation(fields: [person_id], references: [id], onUpdate: NoAction)
+  episode       Episode       @relation(fields: [episode_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([role], map: "idx_EpisodePerson_role")
+  @@index([person_id], map: "idx_EpisodePerson_person_id")
+  @@index([episode_id], map: "idx_EpisodePerson_episode_id")
 }
 
 /// Архивное фото (оригинальное изображение из архива)
 model ArchivePhoto {
-  id              Int        @id @default(autoincrement())
-  episode_id      Int
-  photo_path      String
-  filename        String
-  width           Int?
-  height          Int?
-  source_width    Int?       // оригинальное разрешение
-  source_height   Int?
-  source_type     String?    // camera_photo | screen_shot | video_frame
-  osd_text        String?    // OCR распознанный текст OSD
-  quality_score   Float?     // 0.0-1.0
-  tier            String?    // A | B | C | D (quality tier)
-  profile         String?    // modern_1080p | color_lowres | ir_screen_photo
-  processed_at    DateTime?
-  status          String     @default("pending") // pending | processing | completed
-  created_at      DateTime   @default(now())
-  
-  episode         Episode    @relation(fields: [episode_id], references: [id], onDelete: Cascade)
-  faces           ArchiveFace[]
-  
-  @@index([episode_id])
-  @@index([processed_at])
+  id            Int           @id @default(autoincrement())
+  episode_id    Int
+  photo_path    String
+  filename      String
+  width         Int?
+  height        Int?
+  source_width  Int?
+  source_height Int?
+  source_type   String?
+  osd_text      String?
+  quality_score Float?
+  tier          String?
+  profile       String?
+  processed_at  String?
+  status        String        @default("pending")
+  created_at    String        @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  faces         ArchiveFace[]
+  episode       Episode       @relation(fields: [episode_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([processed_at], map: "idx_ArchivePhoto_processed_at")
+  @@index([episode_id], map: "idx_ArchivePhoto_episode_id")
 }
 
 /// Архивное лицо (детектированное на архивном фото)
 model ArchiveFace {
-  id                    Int        @id @default(autoincrement())
-  photo_id              Int
-  episode_person_id     Int?
-  cluster_id            Int?
-  bbox_x                Float
-  bbox_y                Float
-  bbox_w                Float
-  bbox_h                Float
-  det_score             Float?
-  kps                   String?    // JSON array of 5 points
-  pitch_deg             Float?     // угол наклона вверх/вниз
-  yaw_deg               Float?     // угол поворота влево/вправо
-  blur_score            Float?     // 0.0-1.0, ниже = размыто
-  brightness            Float?     // средняя яркость
-  occlusion             Float?     // 0.0-1.0, выше = больше окклюзия
-  quality_score         Float?     // 0.0-1.0综合 оценка качества
-  tier                  String?    // A | B | C | D
-  embedding             String?    // JSON array of floats
-  embedding_model       String?    // buffalo_l | adaface
-  status                String     @default("detected") // detected | embedding_extracted | manual_review | rejected
-  reject_reason         String?
-  created_at            DateTime   @default(now())
-  processed_at          DateTime?
-  
-  photo                 ArchivePhoto @relation(fields: [photo_id], references: [id], onDelete: Cascade)
-  episode_person        EpisodePerson? @relation(fields: [episode_person_id], references: [id], onDelete: SetNull)
-  cluster               FaceCluster? @relation(fields: [cluster_id], references: [id], onDelete: SetNull)
-  
-  @@index([photo_id])
-  @@index([episode_person_id])
-  @@index([cluster_id])
-  @@index([tier])
-  @@index([status])
+  id                Int            @id @default(autoincrement())
+  photo_id          Int
+  episode_person_id Int?
+  cluster_id        Int?
+  bbox_x            Float
+  bbox_y            Float
+  bbox_w            Float
+  bbox_h            Float
+  det_score         Float?
+  kps               String?
+  pitch_deg         Float?
+  yaw_deg           Float?
+  blur_score        Float?
+  brightness        Float?
+  occlusion         Float?
+  quality_score     Float?
+  tier              String?
+  embedding         String?
+  embedding_model   String?
+  status            String         @default("detected")
+  reject_reason     String?
+  created_at        String         @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  processed_at      String?
+  cluster           FaceCluster?   @relation(fields: [cluster_id], references: [id], onUpdate: NoAction)
+  episode_person    EpisodePerson? @relation(fields: [episode_person_id], references: [id], onUpdate: NoAction)
+  photo             ArchivePhoto   @relation(fields: [photo_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status], map: "idx_ArchiveFace_status")
+  @@index([tier], map: "idx_ArchiveFace_tier")
+  @@index([cluster_id], map: "idx_ArchiveFace_cluster_id")
+  @@index([episode_person_id], map: "idx_ArchiveFace_episode_person_id")
+  @@index([photo_id], map: "idx_ArchiveFace_photo_id")
 }
 
 /// Кластер лиц внутри эпизода (предполагаемый один человек)
 model FaceCluster {
-  id                      Int        @id @default(autoincrement())
+  id                      Int           @id @default(autoincrement())
   episode_id              Int
-  cluster_id              String     // UUID как строка
-  face_count              Int        @default(1)
+  cluster_id              String
+  face_count              Int           @default(1)
   avg_quality             Float?
   representative_photo_id Int?
-  created_at              DateTime   @default(now())
-  updated_at              DateTime   @default(now())
-  
-  episode                 Episode    @relation(fields: [episode_id], references: [id], onDelete: Cascade)
+  created_at              String        @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  updated_at              String        @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
   faces                   ArchiveFace[]
-  
-  @@index([episode_id, cluster_id])
-  @@unique([episode_id, cluster_id])
+  episode                 Episode       @relation(fields: [episode_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([episode_id, cluster_id], map: "idx_FaceCluster_episode_id_cluster_id")
 }
 
 /// Журнал кластеризации для аудита
 model ClusteringLog {
-  id              Int        @id @default(autoincrement())
+  id              Int     @id @default(autoincrement())
   episode_id      Int
   cluster_id      String
-  action          String     // created | merged | split | labeled | propagated
+  action          String
   person_id       Int?
   from_cluster_id String?
   to_cluster_id   String?
   confidence      Float?
-  updated_by      String?    // operator ID or "auto"
-  timestamp       DateTime   @default(now())
-  
-  episode         Episode    @relation(fields: [episode_id], references: [id], onDelete: Cascade)
-  
-  @@index([episode_id, cluster_id])
-  @@index([timestamp])
+  updated_by      String?
+  timestamp       String  @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  episode         Episode @relation(fields: [episode_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([timestamp], map: "idx_ClusteringLog_timestamp")
+  @@index([episode_id, cluster_id], map: "idx_ClusteringLog_episode_id_cluster_id")
 }
 
 /// Настройка профиля обработки для разных источников
 model ProcessingProfile {
-  name              String     @id
+  name              String @id
   description       String
-  detector          String     @default("scrfd") // scrfd | retinaface | yolo
-  recognizer        String     @default("arcface") // arcface | adaface
-  min_face_size     Int        @default(60)
-  min_det_score     Float      @default(0.5)
-  pose_pitch_max    Float      @default(35.0)   // для потолочных камер можно 40+
-  pose_yaw_max      Float      @default(35.0)
-  quality_tier_a    Float      @default(0.7)    // порог для тира A
-  quality_tier_b    Float      @default(0.4)    // порог для тира B
-  similarity_intra  Float      @default(0.55)   // порог склейки внутри эпизода
-  similarity_cross  Float      @default(0.45)   // порог склейки между камерами
-  use_multitemplate Boolean    @default(true)
-  use_bw_twin       Boolean    @default(true)   // генерировать ч/б-близнецы для цветных фото
-  created_at        DateTime   @default(now())
-  updated_at        DateTime   @default(now())
+  detector          String @default("scrfd")
+  recognizer        String @default("arcface")
+  min_face_size     Int    @default(60)
+  min_det_score     Float  @default(0.5)
+  pose_pitch_max    Float  @default(35.0)
+  pose_yaw_max      Float  @default(35.0)
+  quality_tier_a    Float  @default(0.7)
+  quality_tier_b    Float  @default(0.4)
+  similarity_intra  Float  @default(0.55)
+  similarity_cross  Float  @default(0.45)
+  use_multitemplate Int    @default(1)
+  use_bw_twin       Int    @default(1)
+  created_at        String @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
+  updated_at        String @default("strftime('%Y-%m-%d %H:%M:%f', 'now')")
 }
 
 model Settings {
@@ -386,9 +370,9 @@ model Settings {
 }
 
 model FaissUpdateLog {
-  id          Int      @id @default(autoincrement())
-  timestamp   DateTime @default(now())
-  action      String
-  details     String?
-  status      String
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  action    String
+  details   String?
+  status    String
 }

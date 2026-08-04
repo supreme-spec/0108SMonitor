@@ -67,7 +67,7 @@ export default function Server() {
         <Req label="Диск"            min="10 GB (HDD/SSD)"                rec="100 GB+ SSD (видеоархив ~1–3 GB/день)" />
         <Req label="Видеокарта"      min="Любая (CPU режим)"              rec="NVIDIA GPU (8GB+ VRAM для 10+ камер)" />
         <Req label="ОС"              min="Windows 10 / 11 (64-bit)"       rec="Windows 11, последние обновления" />
-        <Req label="Сеть"            min="100 Мбит/с LAN"                 rec="1 Гбит/с (Порты: 8000, 5433, 554)" />
+        <Req label="Сеть"            min="100 Мбит/с LAN"                 rec="1 Гбит/с (Порты: 3000, 8001, 554)" />
       </div>
 
       {/* ── Network settings ── */}
@@ -75,10 +75,10 @@ export default function Server() {
         <div className="flex items-center gap-2 text-kraken-purple font-bold text-xs uppercase tracking-widest mb-1">
           <Zap size={14} /> Сетевые настройки
         </div>
-        <Good>Порт 8000 — Основной интерфейс и API системы.</Good>
-        <Good>Порт 5433 — Внутренний порт PostgreSQL (только localhost).</Good>
+        <Good>Порт 3000 — Основной интерфейс и API системы.</Good>
+        <Good>Порт 8001 — Python Face Engine (только localhost).</Good>
         <Good>Порт 554 — Стандартный порт RTSP для получения видеопотока.</Good>
-        <Note>Для удаленного доступа пробросьте порт 8000 на роутере.</Note>
+        <Note>Для удаленного доступа пробросьте порт 3000 на роутере.</Note>
       </div>
 
       {/* ── GPU acceleration ── */}

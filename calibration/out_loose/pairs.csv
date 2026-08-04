@@ -1,0 +1,16 @@
+folder,a,b,cos
+ep_ceiling_color,img1.jpg#0,img2.jpg#1,0.442
+ep_ceiling_color,img1.jpg#0,img3.jpg#1,0.445
+ep_ceiling_color,img1.jpg#0,img4.jpg#1,0.429
+ep_ceiling_color,img2.jpg#0,img3.jpg#0,0.872
+ep_ceiling_color,img2.jpg#0,img4.jpg#0,0.608
+ep_ceiling_color,img2.jpg#1,img3.jpg#1,0.752
+ep_ceiling_color,img2.jpg#1,img4.jpg#1,0.352
+ep_ceiling_color,img3.jpg#0,img4.jpg#0,0.584
+ep_ceiling_color,img3.jpg#1,img4.jpg#1,0.446
+ep_ir_screen,img1.jpg#0,img3.jpg#0,0.383
+ep_ir_screen,img1.jpg#1,img3.jpg#1,0.451
+ep_modern_osd,img1.jpg#0,img2.jpg#0,0.77
+ep_modern_osd,img1.jpg#1,img2.jpg#1,0.587
+ep_modern_osd,img1.jpg#2,img2.jpg#2,0.752
+ep_modern_osd,img1.jpg#3,img2.jpg#3,0.822

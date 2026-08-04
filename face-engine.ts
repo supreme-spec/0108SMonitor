@@ -555,6 +555,33 @@ export function getPythonServerStatus(): {
   };
 }
 
+/**
+ * Принудительная проверка здоровья Python-сервера с деталями.
+ * Делает свежий запрос на /health и возвращает полную информацию о состоянии.
+ */
+export async function getPythonServerHealth(): Promise<{
+  healthy: boolean;
+  initialized: boolean;
+  details: any;
+}> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const response = await apiFetchWithKey(`${FACE_SERVER_URL}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const data: any = await response.json().catch(() => null);
+    const initialized = data?.initialized === true;
+    const healthy = response.ok && initialized;
+    return { healthy, initialized, details: data };
+  } catch {
+    return { healthy: false, initialized: false, details: "Unreachable" };
+  }
+}
+
 export function getEngineStatus(): {
   initialized: boolean;
   totalDescriptors: number;

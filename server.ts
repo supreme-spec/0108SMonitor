@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import crypto from "crypto";
 import { platform } from "os";
 import fs from "fs";
 import http from "http";
@@ -7,7 +8,7 @@ import multer from "multer";
 import iconv from "iconv-lite";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
-import { spawn, exec, ChildProcessWithoutNullStreams } from "child_process";
+import { spawn, exec, execSync, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
@@ -29,8 +30,9 @@ import {
   unregisterPerson as unregisterFacePerson,
   searchByPhoto,
   rebuildDescriptorIndex,
-  getEngineStatus,
-  assessPhotoQuality,
+   getEngineStatus,
+   getPythonServerHealth,
+   assessPhotoQuality,
   searchByDescriptor,
   addEmbeddingToPerson,
 } from "./face-engine.js";
@@ -165,6 +167,36 @@ const upload = multer({
   },
 });
 
+// Ограниченная конфигурация Multer для UNV/Hikvision вебхуков:
+// 5 МБ максимум, 1 файл, только JPEG/PNG
+const unvWebhookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5 МБ жесткий лимит
+    files: 1,                  // Только 1 файл за запрос
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ["image/jpeg", "image/jpg", "image/png"];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Invalid file type: ${file.mimetype}. Only JPEG/PNG allowed.`));
+    }
+  },
+});
+
+/** Проверяет magic bytes JPEG/PNG в буфере. */
+function validateImageMagicBytes(buffer: Buffer, mimetype: string): boolean {
+  if (buffer.length < 4) return false;
+  if (mimetype === "image/jpeg" || mimetype === "image/jpg") {
+    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (mimetype === "image/png") {
+    return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  }
+  return false;
+}
+
 // ── Утилиты нормализации и кодировки (для импорта людей) ──
 // Браузер на Windows передаёт originalname в latin1, а не UTF-8.
 // Multer не перекодирует это — отсюда кракозябры в именах.
@@ -296,11 +328,62 @@ let recordingsData: Record<number, Record<string, any[]>> = {};
 
 // ── REST API ROUTES ──
 
+// ── Credential encryption helpers (AES-256-GCM) ────────────────────────────────
+const APP_SECRET = process.env.APP_SECRET || "";
+
+function getEncryptionKey(): Buffer | null {
+  if (!APP_SECRET) return null;
+  return crypto.createHash("sha256").update(APP_SECRET).digest();
+}
+
+/** Шифрует значение перед сохранением в БД. Формат: ivHex:tagHex:encryptedHex */
+function encryptCredential(text: string | undefined | null): string | null {
+  if (!text) return null;
+  const key = getEncryptionKey();
+  if (!key) return text; // Без APP_SECRET сохраняем в открытом виде (dev-режим)
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(text, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
+}
+
+/** Дешифрует значение, загруженное из БД. Автоматически определяет зашифрованное значение. */
+function decryptCredential(encrypted: string | undefined | null): string | null {
+  if (!encrypted) return null;
+  if (!APP_SECRET) return encrypted; // Без APP_SECRET ничего не дешифруем
+  const key = getEncryptionKey();
+  if (!key) return encrypted;
+  try {
+    const parts = encrypted.split(":");
+    if (parts.length !== 3) return encrypted; // Не зашифровано — возвращаем как есть
+    const iv = Buffer.from(parts[0], "hex");
+    const tag = Buffer.from(parts[1], "hex");
+    const data = Buffer.from(parts[2], "hex");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
+    return decrypted.toString("utf8");
+  } catch {
+    return encrypted; // Если расшифровка не удалась — возвращаем как есть
+  }
+}
+
+/** Дешифрует учётные данные камеры для in-memory использования. */
+function decryptCameraCreds(cam: any): any {
+  if (!cam) return cam;
+  return {
+    ...cam,
+    username: decryptCredential(cam.username),
+    password: decryptCredential(cam.password),
+  };
+}
+
 // Убирает секреты (username/password) из объекта камеры перед отдачей клиенту.
 // In-memory массив cameras при этом сохраняет creds для ffmpeg.
 function sanitizeCamera(cam: any): any {
   if (!cam) return cam;
-  const { username, password, ...safe } = cam;
+  const { username, password, webhookSecret, ...safe } = cam;
   return safe;
 }
 
@@ -309,7 +392,7 @@ app.get(["/api/cameras", "/api/cameras/"], async (req, res) => {
   try {
     const camsFromDB = await prisma.camera.findMany({ orderBy: { id: "asc" } });
     // Sync in-memory array for WebSocket & FFmpeg use
-    cameras = camsFromDB.map((c: any) => ({ ...c, status: c.status || "offline" }));
+    cameras = camsFromDB.map((c: any) => ({ ...decryptCameraCreds(c), status: c.status || "offline" }));
     res.json(cameras.map(sanitizeCamera));
   } catch (err) {
     logError(err as Error, { path: "/api/cameras", method: "GET" });
@@ -318,37 +401,71 @@ app.get(["/api/cameras", "/api/cameras/"], async (req, res) => {
 });
 
 app.get(["/api/cameras/scan/usb", "/api/cameras/scan/usb/"], (req, res) => {
-  // На Windows реальное сканирование требует Native API.
-  // Возвращаем типичные dshow-устройства как подсказку.
-  res.json({
-    cameras: [
-      { index: 0, source: "USB Video Device", name: "USB Video Device (встроенная / первая)" },
-      { index: 1, source: "USB Video Device #2", name: "USB Video Device #2 (вторая)" }
-    ]
-  });
+  // Автоматическое сканирование USB-устройств требует нативных API.
+  // В RC 1.0 поддерживается только ручной ввод источника (например, "0" или "/dev/video0").
+  res.json({ cameras: [] });
 });
 
 app.get(["/api/cameras/scan/onvif", "/api/cameras/scan/onvif/"], (req, res) => {
-  const onvifNetwork = req.query.network as string || "192.168.1";
-  res.json({
-    cameras: [
-      { ip: `${onvifNetwork}.120`, port: 80, source: `rtsp://${onvifNetwork}.120:554/live/main`, type: "ONVIF (Hikvision)" },
-      { ip: `${onvifNetwork}.155`, port: 8899, source: `rtsp://${onvifNetwork}.155:554/stream1`, type: "ONVIF (Dahua)" }
-    ]
-  });
+  // Фейковый WS-Discovery отключён. В RC 1.0 используйте ручной ввод RTSP URL.
+  res.json({ cameras: [] });
 });
 
 app.post(["/api/cameras/:id/start", "/api/cameras/:id/start/"], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    // 1. Переводим в состояние "connecting" — FFmpeg ещё не запущен или только стартует
     const updated = await prisma.camera.update({
       where: { id },
-      data: { is_active: true, status: "online" },
+      data: { is_active: true, status: "connecting" },
     });
     const index = cameras.findIndex((c) => c.id === id);
-    if (index >= 0) { cameras[index].is_active = true; cameras[index].status = "online"; }
-    res.json({ success: true, status: "online", camera: sanitizeCamera(updated) });
+    if (index >= 0) { cameras[index].is_active = true; cameras[index].status = "connecting"; }
+
+    // 2. Запускаем FFmpeg-конвейер (startCameraPipeline стартует процесс и цикл детекции)
+    const fallbackFrame = getFallbackFrame();
+    startCameraPipeline(cam, fallbackFrame);
+
+    // 3. Ждём до 3 секунд и проверяем: процесс жив? Есть ли реальный кадр?
+    const isOnlineAfterStart = await new Promise<boolean>((resolve) => {
+      const deadline = Date.now() + 3000;
+      const check = () => {
+        const proc = activeFfmpegProcesses.get(id);
+        const shared = cameraFrames.get(id);
+        const hasRealFrame = shared && shared.frame !== fallbackFrame;
+        if (proc && hasRealFrame) return resolve(true);
+        if (!proc) return resolve(false); // процесс упал — ошибка
+        if (Date.now() < deadline) return setTimeout(check, 250);
+        resolve(false); // таймаут — кадры не пришли
+      };
+      check();
+    });
+
+    let finalStatus = "online";
+    let errorMessage: string | undefined;
+    if (!isOnlineAfterStart) {
+      finalStatus = "error";
+      // Останавливаем неудачный процесс, чтобы не слал повторные запросы
+      stopCameraPipeline(id);
+      errorMessage = "FFmpeg failed or no frames received within 3s";
+    }
+
+    // 4. Обновляем статус в БД и in-memory
+    await prisma.camera.update({ where: { id }, data: { status: finalStatus } });
+    const idx2 = cameras.findIndex((c) => c.id === id);
+    if (idx2 >= 0) cameras[idx2].status = finalStatus;
+
+    res.json({
+      success: isOnlineAfterStart,
+      status: finalStatus,
+      camera: sanitizeCamera({ ...updated, status: finalStatus }),
+      ...(errorMessage ? { error: errorMessage } : {}),
+    });
   } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/start" });
     res.status(404).json({ detail: "Camera not found" });
   }
 });
@@ -412,32 +529,31 @@ function findNameAndSimilarity(obj: any): { name?: string, similarity?: number }
   return { name, similarity };
 }
 
-app.post(["/api/cameras/unv/notification", "/api/cameras/unv/notification/", "/api/cameras/unv/webhook", "/api/cameras/unv/webhook/"], upload.any(), (req, res) => {
-  logDebug("UNV LAPI Webhook received", { headers: req.headers['content-type'], query: req.query, bodyKeys: Object.keys(req.body) });
-  
-  let cameraId = parseInt(req.query.camera_id as string || req.query.id as string || "");
-  let camera = cameras.find(c => c.id === cameraId);
-  
-  if (!camera) {
-    // Fallback: match by IP address
-    const incomingIp = req.ip || req.socket.remoteAddress || "";
-    logDebug("Attempting to find UNV camera by IP", { incomingIp });
-    camera = cameras.find(c => 
-      c.camera_type === "UNV" && 
-      c.ip_address && 
-      (incomingIp.includes(c.ip_address) || c.ip_address.includes(incomingIp))
-    );
-  }
-  
-  if (!camera) {
-    camera = cameras.find(c => c.camera_type === "UNV") || cameras[0];
+app.post(["/api/webhook/unv/:secret", "/api/webhook/unv/:secret/"], unvWebhookUpload.single('image'), async (req, res) => {
+  logDebug("UNV LAPI Webhook received", { headers: req.headers['content-type'], bodyKeys: Object.keys(req.body) });
+
+  const secret = req.params.secret;
+  let camera: any = null;
+
+  // Аутентификация: ищем камеру по webhookSecret из URL
+  if (secret) {
+    camera = await prisma.camera.findUnique({
+      where: { webhookSecret: secret },
+    });
+      if (camera) {
+        // Sync in-memory camera with latest DB data (including decrypted credentials)
+        const idx = cameras.findIndex(c => c.id === camera.id);
+        if (idx >= 0) cameras[idx] = { ...cameras[idx], ...decryptCameraCreds(camera) };
+      }
   }
 
   if (!camera) {
-    return res.status(404).json({ error: "No cameras configured to receive UNV notification" });
+    logWarn("UNV webhook rejected: invalid or missing secret", { secret: secret?.slice(0, 8) });
+    return res.status(401).json({ error: "Invalid webhook secret" });
   }
 
-  logInfo(`UNV webhook → camera ID ${camera.id} (${camera.name})`);
+  const cam = camera;
+  logInfo(`UNV webhook → camera ID ${cam.id} (${cam.name})`);
 
   // Parse JSON data from any fields or body
   let parsedPayload: any = null;
@@ -490,22 +606,28 @@ app.post(["/api/cameras/unv/notification", "/api/cameras/unv/notification/", "/a
     }
   };
 
-  // Save the uploaded snapshot file if present
+  // Save the uploaded snapshot file if present (memory storage + magic byte validation)
   let snapshot_path = "snapshots/ev1.jpg";
-  const filesList = (req.files || []) as Express.Multer.File[];
-  
-  if (filesList.length > 0) {
-    const file = filesList[0];
-    const targetFilename = getSmartCaptureFilename(personName, path.extname(file.originalname) || '.jpg');
-    const targetPath = path.join(snapshotsDir, targetFilename);
-    try {
-      fs.copyFileSync(file.path, targetPath);
-      snapshot_path = `snapshots/${targetFilename}`;
-      logInfo(`UNV snapshot saved: ${snapshot_path}`);
-    } catch (err) {
-      logError(err as Error, { context: "UNV snapshot copy" });
+  const file = req.file as Express.Multer.File | undefined;
+
+  if (file) {
+    // Проверка magic bytes (JPEG/PNG) — защита от подмены расширения
+    if (!validateImageMagicBytes(file.buffer, file.mimetype)) {
+      logWarn(`UNV webhook: invalid magic bytes for camera ${cam.id}`, { filename: file.originalname, mimetype: file.mimetype });
+    } else {
+      const ext = path.extname(file.originalname) || '.jpg';
+      const targetFilename = getSmartCaptureFilename(personName, ext);
+      const targetPath = path.join(snapshotsDir, targetFilename);
+      try {
+        fs.writeFileSync(targetPath, file.buffer);
+        snapshot_path = `snapshots/${targetFilename}`;
+        logInfo(`UNV snapshot saved: ${snapshot_path} (${file.size} bytes)`);
+      } catch (err) {
+        logError(err as Error, { context: "UNV snapshot save" });
+      }
     }
   } else {
+    // Fallback: base64 image in body fields
     let base64Image: string | null = null;
     for (const key of Object.keys(req.body)) {
       const val = req.body[key];
@@ -517,11 +639,17 @@ app.post(["/api/cameras/unv/notification", "/api/cameras/unv/notification/", "/a
     if (base64Image) {
       try {
         const base64Data = base64Image.includes('base64,') ? base64Image.split('base64,')[1] : base64Image;
-        const targetFilename = getSmartCaptureFilename(personName, ".jpg");
-        const targetPath = path.join(snapshotsDir, targetFilename);
-        fs.writeFileSync(targetPath, Buffer.from(base64Data, 'base64'));
-        snapshot_path = `snapshots/${targetFilename}`;
-        logInfo(`UNV base64 snapshot saved: ${snapshot_path}`);
+        const buf = Buffer.from(base64Data, 'base64');
+        // Magic byte check for base64-decoded images too
+        if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+          const targetFilename = getSmartCaptureFilename(personName, ".jpg");
+          const targetPath = path.join(snapshotsDir, targetFilename);
+          fs.writeFileSync(targetPath, buf);
+          snapshot_path = `snapshots/${targetFilename}`;
+          logInfo(`UNV base64 snapshot saved: ${snapshot_path}`);
+        } else {
+          logWarn("UNV webhook: invalid magic bytes in base64 image");
+        }
       } catch (err) {
         logError(err as Error, { context: "UNV base64 snapshot" });
       }
@@ -612,82 +740,23 @@ app.post(["/api/cameras/unv/notification", "/api/cameras/unv/notification/", "/a
   res.json({ success: true, camera_id: camera.id, processed: true });
 });
 
-app.post(["/api/cameras/:id/test-connection", "/api/cameras/:id/test-connection/"], (req, res) => {
+app.post(["/api/cameras/:id/test-connection", "/api/cameras/:id/test-connection/"], async (req, res) => {
   const id = parseInt(req.params.id);
   const cam = cameras.find((c) => c.id === id);
-  if (cam) {
-    if (cam.camera_type === "UNV") {
-      res.json({
-        connected: true,
-        brand: "Uniview",
-        model: "IPC3238EA LAPI (Face Recognition Series)",
-        driver_type: "UNV LAPI Push Webhook / Готово к получению Face Push. Укажите адрес: http://ваш-сервер:3000/api/cameras/unv/notification?camera_id=" + cam.id,
-        resolution: "3840x2160 (4K UHD)",
-        codec: "H.265 / Smart Face Stream",
-        status_info: "Ожидание HTTP POST от камеры. Канал связи активен."
-      });
-    } else if (cam.camera_type === "Hikvision") {
-      res.json({
-        connected: true,
-        brand: "Hikvision",
-        model: "DS-2CD2183G0-I (Smart Face Recognition)",
-        driver_type: "Hikvision ISAPI Smart Driver",
-        resolution: "3840x2160 (4K)",
-        codec: "H.264 / ISAPI JSON Event stream",
-        status_info: "Интеграция ISAPI активна. Авторизация успешна. Права на чтение событий получены."
-      });
-    } else if (cam.camera_type === "ONVIF") {
-      res.json({
-        connected: true,
-        brand: "ONVIF Profile S/T",
-        model: "Auto-discovered Network IP Camera",
-        driver_type: "ONVIF WSDL Client v2.4",
-        resolution: "1920x1080 (FullHD)",
-        codec: "H.264 / RTSP unicast",
-        status_info: "Авторизация ONVIF успешна. XML-WSDL API доступно. Поток RTSP захвачен."
-      });
-    } else if (cam.camera_type === "RTSP") {
-      res.json({
-        connected: true,
-        brand: "IP Camera (RTSP)",
-        model: "Generic RTSP Streamer",
-        driver_type: "Direct FFmpeg/RTSP Grabber",
-        resolution: "1920x1080 (FullHD)",
-        codec: "H.264 / AAC Audio",
-        status_info: "Поток RTSP успешно захвачен и декодирован. Ошибок пакетов нет."
-      });
-    } else if (cam.camera_type === "IP") {
-      res.json({
-        connected: true,
-        brand: "IP Camera (HTTP)",
-        model: "HTTP MJPEG Streamer",
-        driver_type: "HTTP Multipart stream parser",
-        resolution: "1280x720",
-        codec: "Motion JPEG",
-        status_info: "HTTP соединение установлено. Заголовки multipart/x-mixed-replace получены."
-      });
-    } else {
-      res.json({
-        connected: true,
-        brand: "KrakenEye USB",
-        model: "Pro WebCam v4",
-        driver_type: "V4L2 Linux Kernel Driver",
-        resolution: "1280x720",
-        codec: "YUY2 / Raw MJPEG",
-        status_info: "Устройство захвата /dev/video успешно открыто. Сигнал стабильный."
-      });
-    }
-  } else {
-    res.json({
-      connected: true,
-      brand: "KrakenEye",
-      model: "Generic IP Camera",
-      driver_type: "ONVIF/RTSP",
-      resolution: "1920x1080",
-      codec: "H.264",
-      status_info: "Временный симулятор потока активен."
-    });
+  if (!cam) {
+    return res.status(404).json({ error: 'Camera not found' });
   }
+
+  const result = await probeCamera(cam);
+  res.json({
+    connected: result.connected,
+    camera_id: cam.id,
+    camera_name: cam.name,
+    camera_type: cam.camera_type,
+    source: cam.source,
+    details: result.details,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.post(["/api/recordings/start/:id", "/api/recordings/start/:id/"], async (req, res) => {
@@ -726,13 +795,14 @@ app.post(["/api/cameras", "/api/cameras/"], async (req, res) => {
         driver_type: req.body.driver_type || null,
         ip_address: req.body.ip_address || null,
         ip_port: req.body.ip_port ? parseInt(req.body.ip_port) : null,
-        username: req.body.username || null,
-        password: req.body.password || null,
+        username: encryptCredential(req.body.username) || null,
+        password: encryptCredential(req.body.password) || null,
         use_camera_analytics: req.body.use_camera_analytics || false,
+        webhookSecret: req.body.camera_type === "UNV" || req.body.camera_type === "Hikvision" ? crypto.randomUUID() : null,
       },
     });
-    // Sync in-memory
-    cameras.push({ ...newCam });
+    // Sync in-memory (store plaintext creds for FFmpeg use; sanitizeCamera hides them from API)
+    cameras.push({ ...newCam, username: req.body.username || null, password: req.body.password || null });
     res.status(201).json(sanitizeCamera(newCam));
   } catch (err) {
     logError(err as Error, { path: "/api/cameras", method: "POST" });
@@ -745,13 +815,20 @@ app.put("/api/cameras/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     // Exclude fields that don't exist in Prisma schema
     const { created_at, ...updateData } = req.body;
+    // Шифруем учётные данные перед сохранением в БД
+    if (updateData.username !== undefined && typeof updateData.username === 'string') {
+      updateData.username = updateData.username ? encryptCredential(updateData.username) : null;
+    }
+    if (updateData.password !== undefined && typeof updateData.password === 'string') {
+      updateData.password = updateData.password ? encryptCredential(updateData.password) : null;
+    }
     const updated = await prisma.camera.update({
       where: { id },
       data: updateData,
     });
-    // Sync in-memory
+    // Sync in-memory (расшифровываем для использования в FFmpeg)
     const index = cameras.findIndex((c) => c.id === id);
-    if (index >= 0) cameras[index] = { ...cameras[index], ...updated };
+    if (index >= 0) cameras[index] = { ...cameras[index], ...decryptCameraCreds(updated) };
     res.json(sanitizeCamera(updated));
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id", method: "PUT" });
@@ -2038,60 +2115,63 @@ app.get(["/api/recordings", "/api/recordings/"], async (req, res) => {
 // ── HEALTH API (Full spec for Settings page) ──
 app.get("/api/health", async (req, res) => {
   const engineStatus = getEngineStatus();
+
+  // Честная проверка Python-сервера через face-engine.ts (FORCE свежий запрос)
+  const pythonHealth = await getPythonServerHealth();
+
+  if (!pythonHealth.healthy) {
+    return res.status(503).json({
+      status: "degraded",
+      version: "2.4.1",
+      ai_ready: false,
+      setup_ok: false,
+      setup_errors: ["Face Engine (Python) is unreachable or not initialized"],
+      setup_warnings: [],
+      face_engine: engineStatus,
+      pythonServer: pythonHealth,
+    });
+  }
+
+  const pythonDetails = pythonHealth.details || {};
+  const provider = pythonDetails.provider || pythonDetails.gpu_provider || "CPUExecutionProvider";
+
   let gpu_available = false;
   let gpu_detected = false;
-  let gpu_name = "None";
+  let gpu_name = pythonDetails.gpu_name || "None";
   let gpu_vendor = "CPU";
   let gpu_providers = ["CPUExecutionProvider"];
-  let recognition_provider = "onnxruntime (Pure CPU)";
-  let onnx_package = "onnxruntime";
-  let setup_recommendation = "Видеокарта не найдена. Система работает в CPU режиме.";
+  let recognition_provider = `onnxruntime (${provider})`;
 
-  // Запросим статус у Python-сервера
-  try {
-    const fetch = (await import('node-fetch')).default;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
-    const response = await fetch('http://localhost:8001/status', { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (response.ok) {
-      const pythonStatus = await response.json() as any;
-      const provider = pythonStatus.provider || "CPUExecutionProvider";
-      recognition_provider = `onnxruntime (${provider})`;
-      
-      if (provider !== "CPUExecutionProvider") {
-        gpu_available = true;
-        gpu_detected = true;
-        if (provider.includes("CUDA")) {
-          gpu_name = "NVIDIA GPU";
-          gpu_vendor = "NVIDIA";
-        } else if (provider.includes("Dml")) {
-          gpu_name = "DirectX GPU";
-          gpu_vendor = "DirectML";
-        } else if (provider.includes("OpenVINO")) {
-          gpu_name = "Intel GPU/CPU";
-          gpu_vendor = "Intel";
-        } else if (provider.includes("ROCM")) {
-          gpu_name = "AMD GPU";
-          gpu_vendor = "AMD";
-        }
-        gpu_providers = [provider, "CPUExecutionProvider"];
-        setup_recommendation = `Ускорение через ${provider} активно`;
-      } else {
-        setup_recommendation = "Python-сервер работает в CPU-режиме";
-      }
+  if (provider !== "CPUExecutionProvider") {
+    gpu_available = true;
+    gpu_detected = true;
+    if (provider.includes("CUDA")) {
+      gpu_name = pythonDetails.gpu_name || "NVIDIA GPU";
+      gpu_vendor = "NVIDIA";
+    } else if (provider.includes("Dml")) {
+      gpu_name = pythonDetails.gpu_name || "DirectX GPU";
+      gpu_vendor = "DirectML";
+    } else if (provider.includes("OpenVINO")) {
+      gpu_name = pythonDetails.gpu_name || "Intel GPU/CPU";
+      gpu_vendor = "Intel";
+    } else if (provider.includes("ROCM")) {
+      gpu_name = pythonDetails.gpu_name || "AMD GPU";
+      gpu_vendor = "AMD";
     }
-  } catch (e) {
-    // Python-сервер не доступен, оставляем значения по умолчанию
+    gpu_providers = [provider, "CPUExecutionProvider"];
   }
+
+  const setup_recommendation = gpu_available
+    ? `GPU acceleration active via ${provider}`
+    : "No GPU detected. System runs in CPU mode.";
 
   res.json({
     status: "ok",
     version: "2.4.1",
-    cameras: {}, // Будет заполняться динамически
-    faiss: {}, // Будет заполняться из БД
+    cameras: {},
+    faiss: {},
     faiss_index_types: {},
-    ai_ready: engineStatus.initialized,
+    ai_ready: engineStatus.initialized && pythonHealth.initialized,
     recognition_threshold: 0.70,
     recognition_threshold_pct,
     gpu_enabled: gpu_available,
@@ -2107,9 +2187,13 @@ app.get("/api/health", async (req, res) => {
     setup_errors: [],
     setup_warnings: [],
     setup_recommendation,
-    onnx_version: "1.16.3",
-    onnx_package,
+    onnx_version: pythonDetails.onnx_version || "1.16.3",
+    onnx_package: "onnxruntime",
     face_engine: engineStatus,
+    pythonServer: pythonHealth,
+    modules: pythonDetails.modules || {},
+    cuda_available: pythonDetails.cuda_available || false,
+    cuda_version: pythonDetails.cuda_version || null,
   });
 });
 
@@ -2668,7 +2752,59 @@ function getFfmpegPath(): string {
   return "ffmpeg";
 }
 
-/** Возвращает аргументы ffmpeg ДО спецификации выходного файла (всё, что идёт до -i уже включено). */
+function getFfprobePath(): string {
+  const projectBinPath = path.join(process.cwd(), "bin", "ffprobe.exe");
+  if (fs.existsSync(projectBinPath)) return projectBinPath;
+  const extractedPath = path.join(process.cwd(), "bin", "ffmpeg-master-latest-win64-gpl", "bin", "ffprobe.exe");
+  if (fs.existsSync(extractedPath)) return extractedPath;
+  return "ffprobe";
+}
+
+/** Real camera connectivity probe using ffprobe (RTSP/HTTP) or device check (USB). */
+async function probeCamera(cam: any): Promise<{ connected: boolean; details: string }> {
+  try {
+    if (cam.camera_type === "USB" || /^\d+$/.test((cam.source || "").trim())) {
+      if (process.platform === "win32") {
+        const idx = parseInt((cam.source || "0").trim(), 10);
+        const devName = idx === 0 ? "USB Video Device" : `USB Video Device #${idx + 1}`;
+        const cmd = `ffprobe -v error -f dshow -list_devices true -i video="${devName}"`;
+        await execAsync(cmd, { timeout: 5000 });
+        return { connected: true, details: `USB device "${devName}" accessible` };
+      } else {
+        const devPath = cam.source || "/dev/video0";
+        if (fs.existsSync(devPath)) {
+          return { connected: true, details: `Device ${devPath} exists` };
+        }
+        return { connected: false, details: `Device ${devPath} not found` };
+      }
+    }
+
+    // RTSP / IP / ONVIF / Hikvision / UNV: probe the stream URL
+    let source = (cam.source || "").trim();
+    if (cam.username && cam.password && source && !/:\/\/[^@]+@/.test(source)) {
+      try {
+        const u = new URL(source);
+        u.username = encodeURIComponent(cam.username);
+        u.password = encodeURIComponent(cam.password);
+        source = u.toString();
+      } catch { /* not a URL, leave as-is */ }
+    }
+
+    if (!source) {
+      return { connected: false, details: "No source URL configured" };
+    }
+
+    const probePath = getFfprobePath();
+    const cmd = `"${probePath}" -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout 5000000 -i "${source}"`;
+    const { stdout } = await execAsync(cmd, { timeout: 6000 });
+    const hasStream = stdout.trim().length > 0;
+    return { connected: hasStream, details: hasStream ? `Stream probed: ${stdout.trim()}` : "No video stream found" };
+  } catch (error: any) {
+    const msg = error.message || error.stderr || "probe failed";
+    return { connected: false, details: msg.split("\n")[0].trim() };
+  }
+}
+
 function buildFfmpegInputArgs(cam: any): string[] {
   const isUsb = cam.camera_type === "USB" || /^\d+$/.test((cam.source || "").trim());
   if (isUsb) {
@@ -2678,9 +2814,15 @@ function buildFfmpegInputArgs(cam: any): string[] {
       const idx = parseInt(m[1], 10);
       inputSource = idx === 0 ? "USB Video Device" : `USB Video Device #${idx + 1}`;
     }
-    return ["-hide_banner", "-loglevel", "error", "-f", "dshow", "-i", `video=${inputSource}`];
+    // Кроссплатформенность: Windows использует dshow, Linux — v4l2
+    if (process.platform === "win32") {
+      return ["-hide_banner", "-loglevel", "error", "-f", "dshow", "-i", `video=${inputSource}`];
+    } else {
+      const devPath = inputSource.startsWith("/dev/") ? inputSource : "/dev/video0";
+      return ["-hide_banner", "-loglevel", "error", "-f", "v4l2", "-framerate", "25", "-video_size", "640x480", "-i", devPath];
+    }
   }
-  // RTSP / IP / Hikvision / UNV: подставляем сохранённые учётные данные в URL, если их нет в source
+  // RTSP / IP / ONVIF / Hikvision / UNV: подставляем сохранённые учётные данные в URL, если их нет в source
   let source = (cam.source || "").trim();
   if (cam.username && cam.password && source && !/:\/\/[^@]+@/.test(source)) {
     try {
@@ -3270,13 +3412,48 @@ async function handleConfirmationEvent(cam: any, match: any, frameBase64: string
 const cameraStreams = new Map<number, Set<WebSocket>>();
 const activeFfmpegProcesses = new Map<number, ChildProcessWithoutNullStreams>();
 // Общий последний кадр + распознанные лица на камеру (читается всеми WS-клиентами этой камеры)
-const cameraFrames = new Map<number, { frame: string; faces: any[] }>();
+const cameraFrames = new Map<number, { frame: string; faces: any[]; dropped: number }>();
+// Bounded очередь кадров для AI detection: дробим поток (25 FPS) от AI (10-12 FPS)
+// Когда очередь переполнена — выбрасываем старый кадр (FIFO), AI всегда видит свежий
+const AI_QUEUE_MAX = 3;
+const cameraFrameQueues = new Map<number, Buffer[]>();
+// Счётчики dropped frames для отладки/мониторинга
+const cameraDetectionDropped = new Map<number, number>();
 // Единый таймер детекции/распознавания на камеру (запускается один раз, а не на каждого клиента)
 const cameraDetectionTimers = new Map<number, NodeJS.Timeout>();
+// Session ID для изоляции треков между переподключениями камеры
+// При каждом рестарте FFmpeg генерируется новый UUID. Старые debounce-таймеры
+// и треки сбрасываются, чтобы новые лица не путались с "мертвыми" треками.
+const cameraSessionIds = new Map<number, string>();
 // Счётчик неудачных запусков FFmpeg на камеру (для экспоненциального backoff при недоступной камере)
 const cameraFfmpegRetries = new Map<number, number>();
 // Отложенные таймеры перезапуска FFmpeg (чтобы их можно было отменить при остановке пайплайна)
 const cameraRestartTimers = new Map<number, NodeJS.Timeout>();
+
+/** Максимальное количество попыток перезапуска FFmpeg перед открытием circuit breaker. */
+const MAX_RESTART_ATTEMPTS = 10;
+/** Пауза circuit breaker после Max_Restart_Attempts (5 минут). */
+const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
+
+/** Circuit breaker: помечает камеры, где постоянно падает FFmpeg. */
+interface CircuitBreakerEntry {
+  failures: number;
+  reason: string;
+  openedAt: number;
+}
+const cameraCircuitBreakers = new Map<number, CircuitBreakerEntry>();
+
+/** Классифицирует ошибку FFmpeg по содержимому stderr для диагностики. */
+function classifyFfmpegError(stderrText: string, code: number | null): string {
+  const lower = stderrText.toLowerCase();
+  if (lower.includes("authorization") || lower.includes("401") || lower.includes("403") || lower.includes("wrong password") || lower.includes("permission denied")) return "error:auth_failed";
+  if (lower.includes("connection refused") || lower.includes("connection reset") || lower.includes("timed out") || lower.includes("timeout")) return "error:rtsp_timeout";
+  if (lower.includes("no such file") || lower.includes("device or resource busy")) return "error:camera_offline";
+  if (lower.includes("invalid data") || lower.includes("invalid url")) return "error:stream_error";
+  if (code === -2 /* SIGINT */ || code === -9 /* SIGKILL */) return "error:ffmpeg_killed";
+  return "error:ffmpeg_crash";
+}
+
 
 wssCamera.on("connection", (ws, req) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
@@ -3324,9 +3501,11 @@ wssCamera.on("connection", (ws, req) => {
       JSON.stringify({
         type: "FRAME",
         camera_id: cameraId,
+        session_id: cameraSessionIds.get(cameraId) || null,
         timestamp: Date.now(),
         frame,
         faces,
+        dropped: shared ? shared.dropped : 0,
       })
     );
   }, 100);
@@ -3380,11 +3559,27 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
     const ffmpegPath = getFfmpegPath();
     const proc = spawn(ffmpegPath, args);
     activeFfmpegProcesses.set(cam.id, proc);
-    logInfo(`FFmpeg запущен для камеры ${cam.id} (${cam.name})`, { source: cam.source, path: ffmpegPath });
+
+    // Session isolation: при каждом рестарте FFmpeg генерируем новый UUID.
+    // При переподключении камеры старый session_id становится недействительным —
+    // клиенты сбрасывают треки, а debounce-кэши очищаются.
+    const isRestart = cameraSessionIds.has(cam.id);
+    if (isRestart) {
+      const prefix = `${cam.id}:`;
+      for (const key of lastEventAt.keys()) { if (key.startsWith(prefix)) lastEventAt.delete(key); }
+      for (const key of lastConfirmationAt.keys()) { if (key.startsWith(prefix)) lastConfirmationAt.delete(key); }
+      for (const key of lastUnknownPersonAt.keys()) { if (key.startsWith(prefix)) lastUnknownPersonAt.delete(key); }
+    }
+    cameraSessionIds.set(cam.id, crypto.randomUUID());
+    const sessionId = cameraSessionIds.get(cam.id)!;
+    cameraFrameQueues.set(cam.id, []);
+    logInfo(`FFmpeg запущен для камеры ${cam.id} (${cam.name})`, { source: cam.source, path: ffmpegPath, session_id: sessionId });
 
     // Эффективный разбор MJPEG: один растущий буфер + indexOf (без побайтовых аллокаций)
     let acc = Buffer.alloc(0);
     let headerFound = false;
+    // Собираем stderr для классификации ошибки при падении FFmpeg
+    let stderrBuffer = "";
 
     proc.stdout.on("data", (chunk: Buffer) => {
       acc = acc.length ? Buffer.concat([acc, chunk]) : chunk;
@@ -3409,24 +3604,52 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
           break;
         }
         const jpeg = acc.slice(0, e + 2);
-        const shared = cameraFrames.get(cam.id) || { frame: fallbackFrame, faces: [] };
+        const shared = cameraFrames.get(cam.id) || { frame: fallbackFrame, faces: [], dropped: 0 };
         shared.frame = jpeg.toString("base64");
         cameraFrames.set(cam.id, shared);
-        // Пошёл реальный поток — сбрасываем счётчик неудач, чтобы backoff обнулился
+        // Пошёл реальный поток — сбрасываем счётчики неудач и circuit breaker
         if (cameraFfmpegRetries.has(cam.id)) cameraFfmpegRetries.delete(cam.id);
+        if (cameraCircuitBreakers.has(cam.id)) cameraCircuitBreakers.delete(cam.id);
+        // Пушим кадр в bounded очередь для AI detection (drop oldest если переполнена)
+        const queue = cameraFrameQueues.get(cam.id) || [];
+        if (queue.length >= AI_QUEUE_MAX) {
+          queue.shift(); // Drop oldest frame — AI всегда видит свежие кадры
+          shared.dropped++;
+        }
+        queue.push(jpeg);
+        cameraFrameQueues.set(cam.id, queue);
         acc = acc.slice(e + 2);
         headerFound = false;
       }
     });
 
-    proc.stderr.on("data", (d) => logDebug(`FFmpeg (${cam.id}): ${d.toString().trim()}`));
+    proc.stderr.on("data", (d) => {
+      const msg = d.toString().trim();
+      logDebug(`FFmpeg (${cam.id}): ${msg}`);
+      stderrBuffer += msg + "\n";
+    });
 
-    proc.on("error", (err) => logError(`Ошибка FFmpeg для камеры ${cam.id}: ${err.message}`));
+    proc.on("error", (err) => {
+      logError(`Ошибка FFmpeg для камеры ${cam.id}: ${err.message}`);
+      const reason = classifyFfmpegError(stderrBuffer, null);
+      prisma.camera.update({ where: { id: cam.id }, data: { status: reason } }).catch(() => {});
+      stopCameraPipeline(cam.id);
+    });
+
+    proc.on("exit", (code, signal) => {
+      if (code !== 0 && code !== null) {
+        logWarn(`FFmpeg exited unexpectedly for camera ${cam.id}, code: ${code}, signal: ${signal}`);
+        const reason = classifyFfmpegError(stderrBuffer, code);
+        prisma.camera.update({ where: { id: cam.id }, data: { status: reason } }).catch(() => {});
+      }
+      activeFfmpegProcesses.delete(cam.id);
+    });
 
     proc.on("close", (code) => {
       logInfo(`FFmpeg завершил работу для камеры ${cam.id}, код: ${code}`);
       activeFfmpegProcesses.delete(cam.id);
       cameraFrames.delete(cam.id);
+      const reason = code === 0 ? "offline" : classifyFfmpegError(stderrBuffer, code);
 
       // Нет смысла перезапускать, если для камеры не осталось клиентов или она выключена
       const currentCam = cameras.find(c => c.id === cam.id);
@@ -3436,13 +3659,38 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
         return;
       }
 
+      // Circuit breaker: если превышено Max_Restart_Attempts — открываем CB и ставим длинную паузу
+      const cb = cameraCircuitBreakers.get(cam.id);
+      if (cb && cb.failures >= MAX_RESTART_ATTEMPTS) {
+        const now = Date.now();
+        const elapsed = now - cb.openedAt;
+        if (elapsed < CIRCUIT_BREAKER_COOLDOWN_MS) {
+          logWarn(`Circuit breaker OPEN для камеры ${cam.id} — пауза ${(CIRCUIT_BREAKER_COOLDOWN_MS - elapsed) / 1000}с (${cb.reason})`);
+          prisma.camera.update({ where: { id: cam.id }, data: { status: cb.reason } }).catch(() => {});
+          return;
+        }
+        // Пауза прошла — пробуем half-open (сбрасываем)
+        logInfo(`Circuit breaker HALF-OPEN для камеры ${cam.id} — пробуем перезапуск`);
+        cameraCircuitBreakers.delete(cam.id);
+        cameraFfmpegRetries.set(cam.id, 0);
+      }
+
       // Экспоненциальный backoff: 3s → 6s → 12s → 24s → 30s (кап), чтобы не долбить недоступную камеру
       const attempts = (cameraFfmpegRetries.get(cam.id) || 0) + 1;
       cameraFfmpegRetries.set(cam.id, attempts);
+
+      // Circuit breaker: считаем неудачи
+      if (!cb) {
+        cameraCircuitBreakers.set(cam.id, { failures: attempts, reason, openedAt: Date.now() });
+      } else {
+        cb.failures = attempts;
+        cb.reason = reason;
+      }
+
       const delay = Math.min(30000, 3000 * 2 ** Math.min(attempts - 1, 4));
       // Логируем не каждую попытку, чтобы не засорять лог при долгой недоступности
       if (attempts === 1 || attempts % 5 === 0) {
-        logWarn(`Камера ${cam.id} (${cam.name}) недоступна, попытка №${attempts}, следующий повтор через ${delay / 1000}с`);
+        logWarn(`Камера ${cam.id} (${cam.name}) недоступна, попытка №${attempts}/${MAX_RESTART_ATTEMPTS}, следующий повтор через ${delay / 1000}с. Причина: ${reason}`);
       }
 
       const restartTimer = setTimeout(() => {
@@ -3469,18 +3717,28 @@ function startCameraDetection(cam: any, fallbackFrame: string) {
   const timer = setInterval(async () => {
     if (!activeFfmpegProcesses.has(cam.id)) return;
     const shared = cameraFrames.get(cam.id);
-    const frameBase64 = shared ? shared.frame : fallbackFrame;
-    if (!frameBase64 || frameBase64 === fallbackFrame) return; // реального кадра ещё нет
+    if (!shared) return;
+
+    // Pop все доступные кадры из bounded очереди — берём самый свежий
+    const queue = cameraFrameQueues.get(cam.id) || [];
+    if (queue.length === 0) return;
+    // Drop intermediate frames, оставляем только самый свежий кадр
+    let buf: Buffer | null = null;
+    while (queue.length > 0) {
+      buf = queue.shift()!;
+    }
+    if (!buf) return;
+
     if (detectionInProgress) return;
 
     detectionInProgress = true;
     try {
-      const buf = Buffer.from(frameBase64, "base64");
+      const frameBase64 = buf.toString("base64");
       const faces = await detectFaces(buf);
       const enriched = await processDetectedFaces(cam, frameBase64, faces);
-      const cur = cameraFrames.get(cam.id) || { frame: frameBase64, faces: [] };
-      cur.faces = enriched;
-      cameraFrames.set(cam.id, cur);
+      shared.faces = enriched;
+      shared.dropped = shared.dropped || 0;
+      cameraFrames.set(cam.id, shared);
     } catch (e) {
       logError(e as Error, { cameraId: cam.id });
     }
@@ -3490,10 +3748,34 @@ function startCameraDetection(cam: any, fallbackFrame: string) {
   cameraDetectionTimers.set(cam.id, timer);
 }
 
+function killProcessTree(pid: number): void {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      execSync(`taskkill /F /PID ${pid} /T`, { stdio: "ignore" });
+    } else {
+      // Negative PID = entire process group (includes children)
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        process.kill(pid, "SIGKILL");
+      }
+    }
+  } catch {
+    /* process already exited — nothing to kill */
+  }
+}
+
 function stopCameraPipeline(cameraId: number) {
   const proc = activeFfmpegProcesses.get(cameraId);
   if (proc) {
-    try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+    const pid = proc.pid;
+    // Рекурсивное убийство дерева процессов (включая дочерние ffprobe/encoder)
+    try {
+      killProcessTree(pid);
+    } catch {
+      try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+    }
     activeFfmpegProcesses.delete(cameraId);
   }
   const timer = cameraDetectionTimers.get(cameraId);
@@ -3508,7 +3790,10 @@ function stopCameraPipeline(cameraId: number) {
     cameraRestartTimers.delete(cameraId);
   }
   cameraFfmpegRetries.delete(cameraId);
+  cameraCircuitBreakers.delete(cameraId);
+  cameraFrameQueues.delete(cameraId);
   cameraFrames.delete(cameraId);
+  cameraSessionIds.delete(cameraId);
 }
 
 // Upgrade handling for websockets
@@ -3754,7 +4039,8 @@ app.post(["/api/cameras/sync", "/api/cameras/sync/"], async (req, res) => {
   try {
     const dbCams = await prisma.camera.findMany({ where: { is_active: true } });
     // Sync in-memory cache
-    cameras = await prisma.camera.findMany({ orderBy: { id: "asc" } }) as any[];
+    const dbCamsAll = await prisma.camera.findMany({ orderBy: { id: "asc" } });
+    cameras = dbCamsAll.map((c: any) => decryptCameraCreds(c));
     const running = dbCams.map(c => c.id);
     res.json({
       ok: true,
@@ -4125,7 +4411,7 @@ async function seedDatabase() {
 
   // Load cameras from DB into in-memory array
   const camsFromDB = await prisma.camera.findMany({ orderBy: { id: "asc" } });
-  cameras = camsFromDB as any[];
+  cameras = camsFromDB.map((c: any) => decryptCameraCreds(c));
 
   // Load persons from DB into in-memory array
   const personsFromDB = await prisma.person.findMany({ include: { photos: true }, orderBy: { created_at: "desc" } });
@@ -4143,6 +4429,22 @@ async function seedDatabase() {
 
 // Middleware для обработки ошибок
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Multer errors (file too large, too many files, etc.)
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "File size exceeds 5MB limit" });
+    }
+    if (err.code === "LIMIT_FILE_COUNT") {
+      return res.status(400).json({ error: "Too many files uploaded" });
+    }
+    return res.status(400).json({ error: err.message });
+  }
+
+  // Custom Multer fileFilter rejection
+  if (err?.message?.includes("Only image files") || err?.message?.includes("Invalid file type") || err?.message?.includes("Only JPEG/PNG")) {
+    return res.status(400).json({ error: err.message });
+  }
+
   logError(err, { url: req.url, method: req.method });
   
   res.status(err.status || 500).json({

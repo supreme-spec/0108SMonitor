@@ -418,33 +418,50 @@ class AIManager:
         # Status for all detectors
         for name in ['scrfd', 'yoloface', 'retinaface']:
             mod = detectors.get(name, {})
+            mod_status = mod.get('status', 'not_installed')
+            installed = mod_status != 'not_installed'
+            # Also verify model file exists on disk
+            model_path = mod.get('model_path')
+            if installed and model_path:
+                from pathlib import Path
+                model_file = Path(__file__).parent.parent.parent.parent / model_path
+                installed = model_file.exists()
             modules_status[name] = {
-                'installed': True,  # Всегда installed (код есть)
-                'loaded': name == active_detector,
-                'active': name == active_detector,
-                'version': mod.get('version'),
+                'installed': installed,
+                'loaded': name == active_detector and installed,
+                'active': name == active_detector and installed,
+                'version': mod.get('version') if installed else None,
                 'provider': mod.get('provider'),
             }
         
         # Status for all recognizers
         for name in ['arcface', 'adaface']:
             mod = recognizers.get(name, {})
+            mod_status = mod.get('status', 'not_instaled')
+            installed = mod_status != 'not_installed'
+            model_path = mod.get('model_path')
+            if installed and model_path:
+                from pathlib import Path
+                model_file = Path(__file__).parent.parent.parent.parent / model_path
+                installed = model_file.exists()
             modules_status[name] = {
-                'installed': True,
-                'loaded': name == active_recognizer,
-                'active': name == active_recognizer,
-                'version': mod.get('version'),
+                'installed': installed,
+                'loaded': name == active_recognizer and installed,
+                'active': name == active_recognizer and installed,
+                'version': mod.get('version') if installed else None,
                 'provider': mod.get('provider'),
             }
         
         # Status for all trackers
         for name in ['bytetrack', 'botsort']:
             mod = trackers.get(name, {})
+            mod_status = mod.get('status', 'not_installed')
+            installed = mod_status != 'not_installed'
             modules_status[name] = {
-                'installed': True,
-                'loaded': name == active_tracker,
-                'active': name == active_tracker,
-                'version': mod.get('version'),
+                'installed': installed,
+                'loaded': name == active_tracker and installed,
+                'active': name == active_tracker and installed,
+                'version': mod.get('version') if installed else None,
                 'provider': mod.get('provider'),
             }
         

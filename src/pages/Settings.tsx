@@ -95,10 +95,12 @@ export default function Settings() {
       bytetrack: boolean
       botsort: boolean
     }
+    faiss: boolean
   }>({
     detectors: { scrfd: true, yoloface: false, retinaface: false },
     recognizers: { arcface: true, adaface: false },
-    trackers: { bytetrack: false, botsort: false }
+    trackers: { bytetrack: false, botsort: false },
+    faiss: true
   })
 
   // GPU
@@ -346,8 +348,8 @@ export default function Settings() {
     }
   }
 
-  const handleToggleModule = async (category: keyof typeof modules, module: string, enabled: boolean) => {
-    const next = { ...modules, [category]: { ...modules[category], [module]: enabled } }
+  const handleToggleModule = async (category: 'detectors' | 'recognizers' | 'trackers', module: string, enabled: boolean) => {
+    const next = { ...modules, [category]: { ...modules[category] as Record<string, boolean>, [module]: enabled } }
     setModules(next)
     // TODO: вызвать API для сохранения настроек модулей
   }
@@ -1424,18 +1426,7 @@ export default function Settings() {
         </p>
 
         {/* AI Module Status Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-kraken-border">
-                <th className="pb-2 font-semibold text-kraken-text">Модуль</th>
-                <th className="pb-2 font-semibold text-kraken-text">Installed</th>
-                <th className="pb-2 font-semibold text-kraken-text">Loaded</th>
-                <th className="pb-2 font-semibold text-kraken-text">Active</th>
-                <th className="pb-2 font-semibold text-kraken-text">Version</th>
-                <th className="pb-2 font-semibold text-kraken-text">Действие</th>
-              </tr>
-            </thead>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* CUDA */}
           <div className={`p-4 rounded-xl border ${health?.cuda_available ? 'bg-green-500/10 border-green-500/20' : 'bg-kraken-hover border-kraken-border'}`}>
             <div className="flex items-start gap-3">
@@ -1609,7 +1600,6 @@ export default function Settings() {
               </div>
             </div>
           </div>
-        </table>
         </div>
 
         {/* Summary */}
