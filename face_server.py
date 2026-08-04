@@ -1219,10 +1219,7 @@ async def detect_faces(
 
         if ai_manager_initialized and ai_manager:
             try:
-                current = ai_manager._config_data.get('active', {}).get('detector') if ai_manager._config_data else None
-                if requested_detector != current:
-                    await ai_manager.switch_detector_async(requested_detector)
-                active_detector = ai_manager._active_detector
+                active_detector = await ai_manager.get_detector(requested_detector)
             except Exception as ai_err:
                 logger.warning(f"AI Manager detect failed, falling back to face_app: {ai_err}")
 
@@ -1245,9 +1242,42 @@ async def detect_faces(
                 return {"faces": []}
             try:
                 img_rgb = load_image_from_bytes(image_bytes)
-                if effective_det_size != 640 and img_rgb is not None:
-                    img_rgb = np.array(Image.fromarray(img_rgb).resize((effective_det_size, effective_det_size), Image.Resampling.LANCZOS))
-                faces_data = face_app.get(img_rgb) if img_rgb is not None else face_app.get(load_image_from_bytes(image_bytes))
+                if img_rgb is None:
+                    return {"faces": []}
+
+                orig_h, orig_w = img_rgb.shape[:2]
+                target = effective_det_size
+                pad_x = 0
+                pad_y = 0
+                scale = 1.0
+
+                if orig_w != target or orig_h != target:
+                    scale = min(target / orig_w, target / orig_h)
+                    new_w = int(round(orig_w * scale))
+                    new_h = int(round(orig_h * scale))
+                    img_resized = np.array(Image.fromarray(img_rgb).resize((new_w, new_h), Image.Resampling.LANCZOS))
+                    canvas = np.zeros((target, target, 3), dtype=img_resized.dtype)
+                    pad_x = (target - new_w) // 2
+                    pad_y = (target - new_h) // 2
+                    canvas[pad_y:pad_y + new_h, pad_x:pad_x + new_w] = img_resized
+                    img_rgb = canvas
+
+                faces_data = face_app.get(img_rgb)
+
+                if scale != 1.0 or pad_x != 0 or pad_y != 0:
+                    for face in faces_data:
+                        if hasattr(face, "bbox") and face.bbox is not None:
+                            bbox = face.bbox.astype(float)
+                            bbox[0] = (bbox[0] - pad_x) / scale
+                            bbox[1] = (bbox[1] - pad_y) / scale
+                            bbox[2] = (bbox[2] - pad_x) / scale
+                            bbox[3] = (bbox[3] - pad_y) / scale
+                            face.bbox = bbox
+                        if hasattr(face, "kps") and face.kps is not None:
+                            kps = face.kps.astype(float)
+                            kps[:, 0] = (kps[:, 0] - pad_x) / scale
+                            kps[:, 1] = (kps[:, 1] - pad_y) / scale
+                            face.kps = kps
             except Exception as face_err:
                 logger.error(f"face_app.get() crashed in detect-faces: {face_err}")
                 import traceback
@@ -1336,6 +1366,117 @@ async def detect_faces(
         raise
     except Exception as e:
         logger.error(f"Detection error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/calibrate-detector", dependencies=[Depends(verify_api_key)])
+async def calibrate_detector(
+    image: UploadFile = File(...),
+    detector: Optional[str] = "scrfd",
+    det_size: Optional[str] = "640",
+    min_face_size: Optional[int] = None,
+    min_det_score: Optional[float] = None,
+    runs: Optional[int] = 1,
+):
+    """
+    Калибровка детектора: возвращает метрики производительности и качества.
+    
+    Parameters:
+        detector: имя детектора (scrfd, yoloface, retinaface)
+        det_size: размер детекции (640, 1024, 1280, 1600)
+        min_face_size: минимальный размер лица (px)
+        min_det_score: минимальный порог уверенности (0..1)
+        runs: количество прогонов для усреднения времени (1-10)
+    """
+    try:
+        if runs < 1: runs = 1
+        if runs > 10: runs = 10
+        
+        image_bytes = await image.read()
+        img = load_image_from_bytes(image_bytes)
+        if img is None or img.size == 0:
+            raise HTTPException(status_code=400, detail="Empty or invalid image")
+
+        # Resolve detector
+        active_detector = None
+        if ai_manager_initialized and ai_manager:
+            try:
+                requested = detector or 'scrfd'
+                active_detector = await ai_manager.get_detector(requested)
+            except Exception as ai_err:
+                logger.warning(f"AI Manager calibrate failed: {ai_err}")
+
+        effective_det_size = 640
+        try:
+            effective_det_size = int(det_size) if det_size else 640
+        except Exception:
+            effective_det_size = 640
+
+        effective_min_face = min_face_size if min_face_size is not None else MIN_FACE_SIZE
+        effective_min_score = min_det_score if min_det_score is not None else MIN_DETECTION_SCORE
+
+        times = []
+        total_faces = 0
+        all_faces = []
+        
+        for run in range(runs):
+            start = time.time()
+            
+            if active_detector is not None:
+                try:
+                    faces_data = await active_detector.detect_with_embedding(image_bytes, det_size=effective_det_size)
+                except Exception:
+                    faces_data = []
+            else:
+                faces_data = []
+            
+            elapsed = time.time() - start
+            times.append(elapsed)
+            
+            if run == 0:
+                # Apply quality gate and collect faces from first run
+                for face in faces_data:
+                    score = float(face.get("det_score", 0)) if isinstance(face, dict) else 0
+                    bbox = face.get("bbox", [0, 0, 0, 0]) if isinstance(face, dict) else [0, 0, 0, 0]
+                    width = int(bbox[2] - bbox[0]) if len(bbox) >= 2 else 0
+                    if score < effective_min_score or width < effective_min_face:
+                        continue
+                    all_faces.append({
+                        "score": score,
+                        "width": width,
+                        "height": int(bbox[3] - bbox[1]) if len(bbox) >= 4 else 0,
+                    })
+                total_faces = len(all_faces)
+
+        times.sort()
+        avg_time = sum(times) / len(times) if times else 0
+        median_time = times[len(times) // 2] if times else 0
+        min_time = times[0] if times else 0
+        max_time = times[-1] if times else 0
+
+        return {
+            "detector": detector or "scrfd",
+            "det_size": effective_det_size,
+            "min_face_size": effective_min_face,
+            "min_det_score": effective_min_score,
+            "runs": runs,
+            "faces_detected": total_faces,
+            "faces": all_faces,
+            "timing": {
+                "avg_ms": round(avg_time * 1000, 2),
+                "median_ms": round(median_time * 1000, 2),
+                "min_ms": round(min_time * 1000, 2),
+                "max_ms": round(max_time * 1000, 2),
+                "fps_estimate": round(1.0 / avg_time, 1) if avg_time > 0 else 0,
+            },
+            "image_size": {"width": img.shape[1], "height": img.shape[0]},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Calibration error: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

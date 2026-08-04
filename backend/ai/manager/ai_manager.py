@@ -27,48 +27,56 @@ from ..base import ModuleStatus, ModuleInfo
 class AIManager:
     """
     Единый менеджер AI операций.
-    
+
     Скрывает детали реализации (рouters, конкретные модели) от остальной системы.
     Поддерживает динамическое переключение модулей без перезапуска.
+    Детекторы хранятся в пуле: можно загружать несколько детекторов одновременно,
+    чтобы разные камеры/зоны могли использовать разные модели без гонок за _active_detector.
     """
 
     CONFIG_PATH = Path(__file__).parent.parent.parent / "ai_config.json"
     _instance = None
-    
+
     @staticmethod
     def get_instance() -> 'AIManager':
         """Get singleton instance."""
         return AIManager()
-    
+
     def __new__(cls, config: dict = None):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self, config: dict = None):
         import logging
         logger = logging.getLogger(__name__)
-        
+
         logger.info(f"AIManager.__init__ called, self._initialized={getattr(self, '_initialized', 'N/A')}")
-        
+
         if self._initialized:
             logger.info("AIManager already initialized, skipping")
             return
         self.config = config or {}
         self._config_data = self._load_config()
-        
+
         # Router instances
         self.detector_router = DetectorRouter(self._config_data.get('router', {}))
         self.recognizer_router = RecognizerRouter(self._config_data.get('router', {}))
         self.tracker_router = TrackerRouter(self._config_data.get('router', {}))
-        
-        # Active modules cache
-        self._active_detector: Optional[Any] = None
-        self._active_recognizer: Optional[Any] = None
-        self._active_tracker: Optional[Any] = None
+
+        # Module pools: храним по одному экземпляру на имя модуля
+        self._detector_instances: Dict[str, Any] = {}
+        self._recognizer_instances: Dict[str, Any] = {}
+        self._tracker_instances: Dict[str, Any] = {}
+
+        # Default active module names (для обратной совместимости с UI)
+        self._active_detector_name: Optional[str] = None
+        self._active_recognizer_name: Optional[str] = None
+        self._active_tracker_name: Optional[str] = None
+
         self._faiss: Optional[FAISS] = None
-        
+
         # Module classes mapping
         self._detector_classes = {
             'scrfd': SCRFD,
@@ -77,13 +85,13 @@ class AIManager:
         }
         self._recognizer_classes = {
             'arcface': ArcFace,
-            'adaface': ArcFace,  # AdaFace пока использует ту же реализацию
+            'adaface': ArcFace,
         }
         self._tracker_classes = {
             'bytetrack': ByteTrack,
-            'botsort': ByteTrack,  # BoT-SORT пока использует ту же реализацию
+            'botsort': ByteTrack,
         }
-        
+
         self._initialized = True
 
     def _load_config(self) -> dict:
@@ -117,65 +125,70 @@ class AIManager:
 
     async def initialize(self) -> bool:
         """Инициализация AIManager и загрузка активных модулей"""
-        # Загружаем конфигурацию
         self._config_data = self._load_config()
-        
-        # Загружаем активные модули
+
         active_detector = self._config_data.get('active', {}).get('detector', 'scrfd')
         active_recognizer = self._config_data.get('active', {}).get('recognizer', 'arcface')
-        
+
         await self._load_detector(active_detector)
         await self._load_recognizer(active_recognizer)
-        
+
         return True
 
     async def _load_detector(self, name: str) -> bool:
-        """Загрузить детектор по имени"""
+        """Загрузить детектор в пул (не выгружает остальные)"""
         import logging
         logger = logging.getLogger(__name__)
-        
+
         logger.info(f"_load_detector called: {name}")
-        
+
         try:
             if name == 'none':
-                self._active_detector = None
+                self._detector_instances.pop(name, None)
+                self._active_detector_name = None
                 self.detector_router._current_detector = None
                 return True
-            
+
             if name not in self._detector_classes:
                 print(f"Unknown detector: {name}")
                 logger.error(f"Unknown detector: {name}")
                 return False
-            
-            logger.info(f"Unloading old detector: {self._active_detector}")
-            
-            # Выгружаем старый модуль
-            if self._active_detector:
-                await self._active_detector.unload_models()
-            
+
+            if name in self._detector_instances:
+                logger.info(f"Detector {name} already loaded, reusing")
+                self._active_detector_name = name
+                self.detector_router._current_detector = self._detector_instances[name]
+                self._config_data['active']['detector'] = name
+                if name in self._config_data.get('detectors', {}):
+                    self._config_data['detectors'][name]['status'] = 'active'
+                self._save_config()
+                return True
+
             logger.info(f"Creating new detector instance: {name}")
-            
-            # Создаем новый экземпляр
+
             detector_class = self._detector_classes[name]
-            self._active_detector = detector_class()
-            
+            instance = detector_class()
+
             logger.info(f"Initializing detector: {name}")
-            
-            await self._active_detector.initialize()
-            
+
+            await instance.initialize()
+
+            self._detector_instances[name] = instance
+            self._active_detector_name = name
+
             # Обновляем router
-            self.detector_router._current_detector = self._active_detector
-            
+            self.detector_router._current_detector = instance
+
             # Обновляем статус в конфиге
             self._config_data['active']['detector'] = name
             if name in self._config_data.get('detectors', {}):
                 self._config_data['detectors'][name]['status'] = 'active'
-            
+
             self._save_config()
-            
+
             logger.info(f"Loaded detector: {name}")
             return True
-            
+
         except Exception as e:
             print(f"Failed to load detector {name}: {e}")
             import traceback as tb
@@ -184,193 +197,177 @@ class AIManager:
             return False
 
     async def _load_recognizer(self, name: str) -> bool:
-        """Загрузить рекогнайзер по имени"""
+        """Загрузить рекогнайзер в пул"""
         try:
             if name == 'none':
-                self._active_recognizer = None
+                self._recognizer_instances.pop(name, None)
+                self._active_recognizer_name = None
                 self.recognizer_router._current_recognizer = None
                 return True
-            
+
             if name not in self._recognizer_classes:
                 print(f"Unknown recognizer: {name}")
                 return False
-            
-            # Выгружаем старый модуль
-            if self._active_recognizer:
-                await self._active_recognizer.unload_models()
-            
-            # Создаем новый экземпляр
+
+            if name in self._recognizer_instances:
+                self._active_recognizer_name = name
+                self.recognizer_router._current_recognizer = self._recognizer_instances[name]
+                self._config_data['active']['recognizer'] = name
+                if name in self._config_data.get('recognizers', {}):
+                    self._config_data['recognizers'][name]['status'] = 'active'
+                self._save_config()
+                return True
+
             recognizer_class = self._recognizer_classes[name]
-            self._active_recognizer = recognizer_class()
-            await self._active_recognizer.initialize()
-            
-            # Обновляем router
-            self.recognizer_router._current_recognizer = self._active_recognizer
-            
-            # Обновляем статус в конфиге
+            instance = recognizer_class()
+            await instance.initialize()
+
+            self._recognizer_instances[name] = instance
+            self._active_recognizer_name = name
+
+            self.recognizer_router._current_recognizer = instance
+
             self._config_data['active']['recognizer'] = name
             if name in self._config_data.get('recognizers', {}):
                 self._config_data['recognizers'][name]['status'] = 'active'
-            
+
             self._save_config()
-            
+
             print(f"Loaded recognizer: {name}")
             return True
-            
+
         except Exception as e:
             print(f"Failed to load recognizer {name}: {e}")
             return False
 
     async def _load_tracker(self, name: str) -> bool:
-        """Загрузить трекер по имени"""
+        """Загрузить трекер в пул"""
         try:
             if name == 'none':
-                self._active_tracker = None
+                self._tracker_instances.pop(name, None)
+                self._active_tracker_name = None
                 self.tracker_router._current_tracker = None
                 return True
-            
+
             if name not in self._tracker_classes:
                 print(f"Unknown tracker: {name}")
                 return False
-            
-            # Выгружаем старый модуль
-            if self._active_tracker:
-                await self._active_tracker.unload_models()
-            
-            # Создаем новый экземпляр
+
+            if name in self._tracker_instances:
+                self._active_tracker_name = name
+                self.tracker_router._current_tracker = self._tracker_instances[name]
+                self._config_data['active']['tracker'] = name
+                if name in self._config_data.get('trackers', {}):
+                    self._config_data['trackers'][name]['status'] = 'active'
+                self._save_config()
+                return True
+
             tracker_class = self._tracker_classes[name]
-            self._active_tracker = tracker_class()
-            await self._active_tracker.initialize()
-            
-            # Обновляем router
-            self.tracker_router._current_tracker = self._active_tracker
-            
-            # Обновляем статус в конфиге
+            instance = tracker_class()
+            await instance.initialize()
+
+            self._tracker_instances[name] = instance
+            self._active_tracker_name = name
+
+            self.tracker_router._current_tracker = instance
+
             self._config_data['active']['tracker'] = name
             if name in self._config_data.get('trackers', {}):
                 self._config_data['trackers'][name]['status'] = 'active'
-            
+
             self._save_config()
-            
+
             print(f"Loaded tracker: {name}")
             return True
-            
+
         except Exception as e:
             print(f"Failed to load tracker {name}: {e}")
             return False
 
+    async def get_detector(self, name: str) -> Optional[Any]:
+        """Получить детектор из пула, загружая при необходимости."""
+        if not name or name == 'none':
+            return None
+        if name not in self._detector_instances:
+            await self._load_detector(name)
+        return self._detector_instances.get(name)
+
+    async def get_recognizer(self, name: str) -> Optional[Any]:
+        """Получить рекогнайзер из пула."""
+        if not name or name == 'none':
+            return None
+        if name not in self._recognizer_instances:
+            await self._load_recognizer(name)
+        return self._recognizer_instances.get(name)
+
+    async def get_tracker(self, name: str) -> Optional[Any]:
+        """Получить трекер из пула."""
+        if not name or name == 'none':
+            return None
+        if name not in self._tracker_instances:
+            await self._load_tracker(name)
+        return self._tracker_instances.get(name)
+
     async def detect(self, image_bytes: bytes, detector_name: str = None) -> list:
         """
-        Детектировать лица на изображении через активный детектор
-        
+        Детектировать лица на изображении через пул детекторов.
+
         Args:
             image_bytes: Байты изображения
             detector_name: Опциональное переопределение детектора для этого запроса
-            
+
         Returns:
             Список детектированных лиц
         """
-        if not self._active_detector and not detector_name:
+        name = detector_name or self._active_detector_name or 'scrfd'
+        detector = await self.get_detector(name)
+        if not detector:
             return []
-        
-        original_detector = None
-        if detector_name and detector_name != (self._config_data.get('active', {}).get('detector') if self._config_data else None):
-            try:
-                original_detector = self._config_data.get('active', {}).get('detector') if self._config_data else None
-                success = await self._load_detector(detector_name)
-                if not success:
-                    return []
-            except Exception:
-                return []
-        
-        try:
-            return await self._active_detector.detect_with_embedding(image_bytes)
-        finally:
-            if original_detector:
-                try:
-                    await self._load_detector(original_detector)
-                except Exception:
-                    pass
 
-    async def recognize(self, face_image: bytes, category: str = None) -> dict:
-        """
-        Распознать лицо через активный рекогнайзер
-        
-        Args:
-            face_image: Байты изображения лица
-            category: Категория для поиска (опционально)
-            
-        Returns:
-            Результат распознавания
-        """
-        if not self._active_recognizer:
+        try:
+            return await detector.detect_with_embedding(image_bytes)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Detector {name} failed: {e}")
+            return []
+
+    async def recognize(self, face_image: bytes, recognizer_name: str = None, category: str = None) -> dict:
+        """Распознать лицо через пул рекогнайзеров."""
+        name = recognizer_name or self._active_recognizer_name or 'arcface'
+        recognizer = await self.get_recognizer(name)
+        if not recognizer:
             return {'error': 'No recognizer loaded'}
-            
-        # Извлечь эмбеддинг
-        embedding = await self._active_recognizer.extract_embedding(face_image)
-        
+
+        embedding = await recognizer.extract_embedding(face_image)
         if not embedding:
             return {'error': 'Failed to extract embedding'}
-            
-        # Поиск в FAISS
+
         faiss = FAISS()
         await faiss.initialize()
         results = await faiss.search(embedding, top_k=5)
-        
+
         return {
             'embedding': embedding,
             'matches': results
         }
 
     async def search(self, embedding: list, category: str = None) -> list:
-        """
-        Поиск по эмбеддингу в базе
-        
-        Args:
-            embedding: Вектор эмбеддинга
-            category: Категория для поиска (опционально)
-            
-        Returns:
-            Список совпадений
-        """
+        """Поиск по эмбеддингу в базе."""
         faiss = FAISS()
         await faiss.initialize()
         return await faiss.search(embedding, top_k=5, threshold=0.4)
 
-    async def track(self, frames: list) -> list:
-        """
-        Отследить лица по кадрам через активный трекер
-        
-        Args:
-            frames: Список кадров (байты)
-            
-        Returns:
-            Список треков
-        """
-        if not self._active_tracker:
+    async def track(self, frames: list, tracker_name: str = None) -> list:
+        """Отследить лица по кадрам через пул трекеров."""
+        name = tracker_name or self._active_tracker_name or 'none'
+        tracker = await self.get_tracker(name)
+        if not tracker:
             return []
-            
-        return await self._active_tracker.track(frames)
+        return await tracker.track(frames)
 
     async def switch_detector_async(self, name: str) -> dict:
-        """
-        Асинхронная версия переключения детектора (для использования внутри FastAPI)
-        
-        Args:
-            name: Имя детектора (scrfd, yoloface, retinaface)
-            
-        Returns:
-            Статус операции
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        logger.info(f"Starting switch_detector_async: {name}")
-        
+        """Переключить детектор по умолчанию (для UI)."""
         success = await self._load_detector(name)
-        
-        logger.info(f"switch_detector_async result: {success}, name: {name}")
-        
         return {
             'success': success,
             'detector': name,
@@ -378,17 +375,8 @@ class AIManager:
         }
 
     async def switch_recognizer_async(self, name: str) -> dict:
-        """
-        Асинхронная версия переключения рекогнайзера
-        
-        Args:
-            name: Имя рекогнайзера (arcface, adaface)
-            
-        Returns:
-            Статус операции
-        """
+        """Переключить рекогнайзер по умолчанию (для UI)."""
         success = await self._load_recognizer(name)
-        
         return {
             'success': success,
             'recognizer': name,
@@ -396,17 +384,8 @@ class AIManager:
         }
 
     async def switch_tracker_async(self, name: str) -> dict:
-        """
-        Асинхронная версия переключения трекера
-        
-        Args:
-            name: Имя трекера (bytetrack, botsort)
-            
-        Returns:
-            Статус операции
-        """
+        """Переключить трекер по умолчанию (для UI)."""
         success = await self._load_tracker(name)
-        
         return {
             'success': success,
             'tracker': name,
@@ -414,45 +393,36 @@ class AIManager:
         }
 
     def get_status(self) -> dict:
-        """
-        Получить полный статус AI системы
-        
-        Returns:
-            Словарь со статусом всех компонентов
-        """
-        # Загружаем актуальную конфигурацию
+        """Получить полный статус AI системы."""
         self._config_data = self._load_config()
-        
-        active_detector = self._config_data.get('active', {}).get('detector', 'none')
-        active_recognizer = self._config_data.get('active', {}).get('recognizer', 'none')
-        active_tracker = self._config_data.get('active', {}).get('tracker', 'none')
-        
+
+        active_detector = self._active_detector_name or self._config_data.get('active', {}).get('detector', 'none')
+        active_recognizer = self._active_recognizer_name or self._config_data.get('active', {}).get('recognizer', 'none')
+        active_tracker = self._active_tracker_name or self._config_data.get('active', {}).get('tracker', 'none')
+
         detectors = self._config_data.get('detectors', {})
         recognizers = self._config_data.get('recognizers', {})
         trackers = self._config_data.get('trackers', {})
-        
+
         modules_status = {}
-        
-        # Status for all detectors
+
         for name in ['scrfd', 'yoloface', 'retinaface']:
             mod = detectors.get(name, {})
             mod_status = mod.get('status', 'not_installed')
             installed = mod_status != 'not_installed'
-            # Also verify model file exists on disk
             model_path = mod.get('model_path')
             if installed and model_path:
                 from pathlib import Path
                 model_file = Path(__file__).parent.parent.parent.parent / model_path
                 installed = model_file.exists()
             modules_status[name] = {
-                'installed': installed,
-                'loaded': name == active_detector and installed,
-                'active': name == active_detector and installed,
+                'installed': installed or name in self._detector_instances,
+                'loaded': name == active_detector or name in self._detector_instances,
+                'active': name == active_detector,
                 'version': mod.get('version') if installed else None,
                 'provider': mod.get('provider'),
             }
-        
-        # Status for all recognizers
+
         for name in ['arcface', 'adaface']:
             mod = recognizers.get(name, {})
             mod_status = mod.get('status', 'not_instaled')
@@ -463,26 +433,25 @@ class AIManager:
                 model_file = Path(__file__).parent.parent.parent.parent / model_path
                 installed = model_file.exists()
             modules_status[name] = {
-                'installed': installed,
-                'loaded': name == active_recognizer and installed,
-                'active': name == active_recognizer and installed,
+                'installed': installed or name in self._recognizer_instances,
+                'loaded': name == active_recognizer or name in self._recognizer_instances,
+                'active': name == active_recognizer,
                 'version': mod.get('version') if installed else None,
                 'provider': mod.get('provider'),
             }
-        
-        # Status for all trackers
+
         for name in ['bytetrack', 'botsort']:
             mod = trackers.get(name, {})
             mod_status = mod.get('status', 'not_installed')
             installed = mod_status != 'not_installed'
             modules_status[name] = {
-                'installed': installed,
-                'loaded': name == active_tracker and installed,
-                'active': name == active_tracker and installed,
+                'installed': installed or name in self._tracker_instances,
+                'loaded': name == active_tracker or name in self._tracker_instances,
+                'active': name == active_tracker,
                 'version': mod.get('version') if installed else None,
                 'provider': mod.get('provider'),
             }
-        
+
         return {
             'active': {
                 'detector': active_detector,
