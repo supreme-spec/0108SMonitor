@@ -1705,6 +1705,14 @@ export default function Settings() {
             <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
             {syncing ? 'Синхронизация...' : 'Синхронизировать с БД'}
           </button>
+          <a
+            href="/api/backup/full"
+            className="btn-ghost flex items-center gap-2 text-sm"
+            title="Скачать ZIP архив со всеми данными"
+          >
+            <Download size={14} />
+            БД в ZIP
+          </a>
         </div>
 
         {syncMsg && (
