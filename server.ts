@@ -1748,6 +1748,53 @@ async function enrollPhotoWithGate(
   return { hasEmbedding: reg.hasEmbedding, error: reg.error };
 }
 
+// ============================================
+// Python Intake Integration
+// ============================================
+
+/**
+ * Вызов Python FastAPI intake endpoint
+ * Возвращает результат обработки папки с фото
+ */
+async function callPythonIntake(
+  folder: string,
+  personName: string
+): Promise<{
+  status: string;
+  photos_count: number;
+  photos_processed: number;
+  photos_passed_quality: number;
+  photos_duplicate: number;
+  photos_diversity_selected: number;
+  embeddings_generated: number;
+  report: any[];
+}> {
+  const PYTHON_INTAKE_URL = process.env.PYTHON_INTAKE_URL || "http://localhost:8001";
+  const url = `${PYTHON_INTAKE_URL}/intake`;
+
+  const formData = new FormData();
+  formData.append("folder", folder);
+  formData.append("person_name", personName);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      body: formData as unknown as string, // TypeScript workaround for FormData
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Python intake failed: ${response.status} ${errorText}`);
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (err: any) {
+    logWarn(`Python intake call failed: ${err.message}. Falling back to enrollPhotoWithGate.`);
+    throw err;
+  }
+}
+
 app.get(["/api/failed_embeddings", "/api/failed_embeddings/"], (req, res) => {
   res.json(failedEmbeddings);
 });

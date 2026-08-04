@@ -13,7 +13,7 @@ import os
 import sys
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 import hashlib
 
@@ -356,6 +356,21 @@ class PersonIntakePipeline:
         return None
 
 
+def _convert_to_serializable(obj: Any) -> Any:
+    """Преобразование numpy ndarray в list для JSON сериализации"""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: _convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_to_serializable(item) for item in obj]
+    elif isinstance(obj, (np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.float64, np.float32)):
+        return float(obj)
+    return obj
+
+
 # Пример использования
 if __name__ == "__main__":
     pipeline = PersonIntakePipeline()
@@ -366,3 +381,123 @@ if __name__ == "__main__":
     )
     
     print(json.dumps(result, indent=2, default=str))
+
+# ============================================
+# FastAPI Server for Intake Pipeline
+# ============================================
+
+def create_intake_app(prisma_client=None) -> "FastAPI":
+    """
+    Создание FastAPI приложения для intake endpoint
+    
+    Args:
+        prisma_client: Prisma Client для доступа к БД
+    
+    Returns:
+        FastAPI app instance
+    """
+    try:
+        from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+        from fastapi.responses import JSONResponse
+        from pydantic import BaseModel
+        from typing import Optional
+        import tempfile
+        import shutil
+    except ImportError:
+        raise RuntimeError("FastAPI is not installed. Install with: pip install fastapi uvicorn")
+    
+    app = FastAPI(title="Person Intake API")
+    
+    # Инициализация пайплайна (single instance)
+    pipeline = PersonIntakePipeline(prisma_client)
+    
+    class IntakeRequest(BaseModel):
+        folder: str
+        person_id: Optional[int] = None
+        person_name: Optional[str] = None
+    
+    @app.post("/intake")
+    async def intake_folder(
+        folder: str = Form(...),
+        person_id: Optional[int] = Form(None),
+        person_name: Optional[str] = Form(None)
+    ):
+        """
+        Обработка папки с фото персонала
+        
+        Args:
+            folder: путь к папке с фото
+            person_id: ID существующей персоны (опционально)
+            person_name: имя персоны (если person_id не указан)
+        
+        Returns:
+            dict с результатами обработки
+        """
+        try:
+            result = pipeline.process_folder(folder, person_name or "Unknown")
+            # Преобразование ndarray в list для JSON сериализации
+            result = _convert_to_serializable(result)
+            return JSONResponse(content=result)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/intake/single")
+    async def intake_single_image(
+        file: UploadFile = File(...),
+        person_id: Optional[int] = Form(None),
+        person_name: Optional[str] = Form(None)
+    ):
+        """
+        Обработка одного изображения
+        
+        Args:
+            file: uploaded image file
+            person_id: ID существующей персоны
+            person_name: имя персоны
+        
+        Returns:
+            dict с результатами обработки одного фото
+        """
+        try:
+            # Сохранить временный файл
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+                shutil.copyfileobj(file.file, tmp_file)
+                tmp_path = tmp_file.name
+            
+            try:
+                # Обработать одно фото как папку
+                folder_path = str(Path(tmp_path).parent)
+                result = pipeline.process_folder(folder_path, person_name or "Unknown")
+                
+                # Вернуть только результат для этого файла
+                if result.get("report") and len(result["report"]) > 0:
+                    single_result = result["report"][0]
+                    return JSONResponse(content={
+                        "filename": file.filename,
+                        **single_result
+                    })
+                else:
+                    return JSONResponse(content={"error": "No result", "filename": file.filename})
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+                
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    return app
+
+
+# Запуск сервера напрямую (для тестирования)
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Попытка получить prisma client
+    prisma = None
+    try:
+        from prisma import Prisma
+        prisma = Prisma()
+    except Exception as e:
+        print(f"Could not initialize Prisma: {e}")
+    
+    app = create_intake_app(prisma)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
