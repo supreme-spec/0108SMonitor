@@ -12,6 +12,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, exec, execSync, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 import { FormData } from "formdata-node";
+import { autoFillCamera, inspectCamera } from "./camera-inspector.js";
 
 const execAsync = promisify(exec);
 import sharp from "sharp";
@@ -449,9 +450,69 @@ app.get(["/api/cameras/scan/usb", "/api/cameras/scan/usb/"], (req, res) => {
   res.json({ cameras: [] });
 });
 
-app.get(["/api/cameras/scan/onvif", "/api/cameras/scan/onvif/"], (req, res) => {
-  // Фейковый WS-Discovery отключён. В RC 1.0 используйте ручной ввод RTSP URL.
-  res.json({ cameras: [] });
+app.get(["/api/cameras/scan/onvif", "/api/cameras/scan/onvif/"], async (req, res) => {
+  try {
+    const ip = (req.query.ip as string | undefined)?.trim();
+    const port = parseInt((req.query.port as string | undefined) || "554", 10);
+    const username = (req.query.username as string | undefined)?.trim();
+    const password = (req.query.password as string | undefined)?.trim();
+    const model = (req.query.model as string | undefined)?.trim();
+
+    if (!ip) {
+      return res.json({ cameras: [] });
+    }
+
+    const result = await autoFillCamera({
+      ip,
+      port: isNaN(port) ? 554 : port,
+      username,
+      password,
+      model,
+    });
+
+    res.json({
+      cameras: [
+        {
+          ip,
+          port,
+          reachable: result.reachable,
+          vendor: result.vendor,
+          model: result.model,
+          firmware: result.firmware,
+          source: result.source,
+          main: result.main,
+          sub: result.sub,
+          transport: result.transport,
+          onvif: result.onvif,
+          sourceLabel: result.sourceLabel,
+          errors: result.errors,
+        },
+      ],
+    });
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/scan/onvif", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post(["/api/cameras/probe", "/api/cameras/probe/"], async (req, res) => {
+  try {
+    const { ip, port, username, password, model } = req.body || {};
+    if (!ip) {
+      return res.status(400).json({ detail: "ip is required" });
+    }
+    const result = await autoFillCamera({
+      ip: String(ip),
+      port: parseInt(String(port || 554), 10),
+      username: username ? String(username) : undefined,
+      password: password ? String(password) : undefined,
+      model: model ? String(model) : undefined,
+    });
+    res.json(result);
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/probe", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
 });
 
 app.post(["/api/cameras/:id/start", "/api/cameras/:id/start/"], async (req, res) => {
@@ -741,17 +802,21 @@ app.post(["/api/webhook/unv/:secret", "/api/webhook/unv/:secret/"], unvWebhookUp
           },
         });
 
-        broadcastSecurity({
-          type: "ALERT",
-          category: matchedPerson.category,
-          person_id: matchedPerson.id,
-          person_name: matchedPerson.name,
-          camera_id: camera.id,
-          confidence: eventConfidence,
-          snapshot_path,
-          timestamp: new Date().toISOString(),
-        });
-        broadcastSecurity({ type: "EVENT" });
+        if (matchedPerson.category === "VIP") {
+          broadcastSecurity({ type: "EVENT" });
+        } else {
+          broadcastSecurity({
+            type: "ALERT",
+            category: matchedPerson.category,
+            person_id: matchedPerson.id,
+            person_name: matchedPerson.name,
+            camera_id: camera.id,
+            confidence: eventConfidence,
+            snapshot_path,
+            timestamp: new Date().toISOString(),
+          });
+          broadcastSecurity({ type: "EVENT" });
+        }
       } else {
         await prisma.event.create({
           data: {
@@ -1082,6 +1147,44 @@ app.put(["/api/cameras/:id/stream-settings", "/api/cameras/:id/stream-settings/"
     res.json({ success: true });
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id/stream-settings", method: "PUT" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-settings/populate/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    const { ip, port, username, password, model } = req.body || {};
+    const targetIp = ip || cam.ip_address || new URL(cam.source).hostname;
+    const targetPort = port || cam.ip_port || 554;
+
+    const result = await autoFillCamera({
+      ip: String(targetIp),
+      port: parseInt(String(targetPort), 10),
+      username: username ? String(username) : cam.username || undefined,
+      password: password ? String(password) : cam.password || undefined,
+      model: model ? String(model) : cam.model_name || undefined,
+    });
+
+    const mapToRow = (main: any) => ({
+      codec: main?.codec || "H.264",
+      gop: main?.gop || 30,
+      fps: main?.fps || 25,
+      resolution: main?.width && main?.height ? `${main.width}x${main.height}` : "1920x1080",
+      bitrate: main?.bitrate || 4096,
+      sourceLabel: result.sourceLabel || "rtsp",
+    });
+
+    const row1 = mapToRow(result.main);
+    const row2 = mapToRow(result.sub || result.main);
+
+    streamSettings.set(id, { row1, row2 });
+    res.json({ success: true, row1, row2, sourceLabel: result.sourceLabel, vendor: result.vendor, model: result.model });
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/:id/stream-settings/populate", method: "POST" });
     res.status(500).json({ detail: "Internal server error" });
   }
 });
@@ -3277,16 +3380,18 @@ async function persistAndBroadcastEvent(e: {
         confirmation_id: e.confirmationId ?? null,
       },
     });
-    broadcastSecurity({
-      type: "ALERT",
-      category: (e.person_category as any) || "UNKNOWN",
-      person_id: e.personId ?? 0,
-      person_name: e.person_name || "Неизвестный",
-      camera_id: e.cameraId,
-      confidence: e.confidence,
-      snapshot_path: e.snapshot_path,
-      timestamp: new Date().toISOString(),
-    });
+    if (e.person_category !== "VIP") {
+      broadcastSecurity({
+        type: "ALERT",
+        category: (e.person_category as any) || "UNKNOWN",
+        person_id: e.personId ?? 0,
+        person_name: e.person_name || "Неизвестный",
+        camera_id: e.cameraId,
+        confidence: e.confidence,
+        snapshot_path: e.snapshot_path,
+        timestamp: new Date().toISOString(),
+      });
+    }
     broadcastSecurity({ type: "EVENT" });
   } catch (err) {
     logError(err as Error, { context: "persist recognition event" });
