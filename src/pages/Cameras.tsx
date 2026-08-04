@@ -505,25 +505,23 @@ export default function Cameras() {
                     setStreamSaving(false)
                   }
                 }}
-                onPopulate={() => {
-                  const cam = detailCamera
-                  const defaults = {
-                    row1: {
-                      codec: 'H.264',
-                      gop: 30,
-                      fps: cam.fps || 25,
-                      resolution: '1920x1080',
-                      bitrate: 4096,
-                    },
-                    row2: {
-                      codec: 'H.264',
-                      gop: 30,
-                      fps: cam.fps || 25,
-                      resolution: '1920x1080',
-                      bitrate: 2048,
-                    },
+                onPopulate={async () => {
+                  try {
+                    const data = await apiFetch<{ success: boolean; row1: any; row2: any; sourceLabel?: string; vendor?: string; model?: string }>(`/cameras/${detailCamera.id}/stream-settings/populate`, {
+                      method: 'POST',
+                      body: JSON.stringify({}),
+                    })
+                    if (data.success) {
+                      setStreamSettings({ row1: data.row1, row2: data.row2 })
+                      if (data.vendor || data.model) {
+                        setAlertState({ isOpen: true, title: 'Готово', message: `Определена камера: ${data.vendor || ''} ${data.model || ''}` })
+                      } else {
+                        setAlertState({ isOpen: true, title: 'Готово', message: `Параметры потоков получены (${data.sourceLabel || 'probe'})` })
+                      }
+                    }
+                  } catch (e: any) {
+                    setAlertState({ isOpen: true, title: 'Ошибка', message: 'Ошибка заполнения: ' + e.message })
                   }
-                  setStreamSettings(defaults)
                 }}
               />
             )}
@@ -1022,6 +1020,7 @@ interface StreamRow {
   fps: number
   resolution: string
   bitrate: number
+  sourceLabel?: 'onvif' | 'rtsp' | 'probe' | 'template' | 'manual' | 'unknown'
 }
 
 interface ActiveWindowsTabProps {
@@ -1030,19 +1029,19 @@ interface ActiveWindowsTabProps {
   loading: boolean
   saving: boolean
   onSave: (row1: StreamRow, row2: StreamRow) => Promise<void>
-  onPopulate: () => void
+  onPopulate: () => Promise<{ row1: StreamRow; row2: StreamRow; sourceLabel?: string; vendor?: string; model?: string } | void>
 }
 
 function ActiveWindowsTab({ camera, settings, loading, saving, onSave, onPopulate }: ActiveWindowsTabProps) {
-  const defaultRow: StreamRow = { codec: 'H.264', gop: 30, fps: camera.fps || 25, resolution: '1920x1080', bitrate: 4096 }
+  const defaultRow: StreamRow = { codec: 'H.264', gop: 30, fps: camera.fps || 25, resolution: '1920x1080', bitrate: 4096, sourceLabel: 'manual' }
 
   const [row1, setRow1] = useState<StreamRow>(settings?.row1 || defaultRow)
-  const [row2, setRow2] = useState<StreamRow>(settings?.row2 || { ...defaultRow, bitrate: 2048 })
+  const [row2, setRow2] = useState<StreamRow>(settings?.row2 || { ...defaultRow, bitrate: 2048, sourceLabel: 'manual' })
 
   useEffect(() => {
     if (settings) {
-      setRow1(settings.row1 || defaultRow)
-      setRow2(settings.row2 || { ...defaultRow, bitrate: 2048 })
+      setRow1({ ...settings.row1, sourceLabel: settings.row1?.sourceLabel || 'manual' })
+      setRow2({ ...settings.row2, sourceLabel: settings.row2?.sourceLabel || 'manual' })
     }
   }, [settings])
 
@@ -1063,50 +1062,69 @@ function ActiveWindowsTab({ camera, settings, loading, saving, onSave, onPopulat
     />
   )
 
-  const renderRow = (row: StreamRow, setRow: (r: StreamRow) => void, label: string) => (
-    <div className="border border-kraken-border rounded-xl p-4">
-      <div className="text-kraken-text text-xs font-semibold mb-3">{label}</div>
-      <div className="grid grid-cols-5 gap-3">
-        <div>
-          {fieldLabel('Кодек')}
-          <select
-            value={row.codec}
-            onChange={e => setRow({ ...row, codec: e.target.value })}
-            className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
-          >
-            <option value="H.264">H.264</option>
-            <option value="H.265">H.265</option>
-          </select>
+  const renderRow = (row: StreamRow, setRow: (r: StreamRow) => void, label: string) => {
+    const setRowWithSource = (r: StreamRow) => setRow({ ...r, sourceLabel: 'manual' })
+    return (
+      <div className="border border-kraken-border rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-kraken-text text-xs font-semibold">{label}</div>
+          {row.sourceLabel && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              row.sourceLabel === 'probe' ? 'border-green-500/40 text-green-400 bg-green-500/10' :
+              row.sourceLabel === 'onvif' ? 'border-kraken-purple/40 text-kraken-purple bg-kraken-purple/10' :
+              row.sourceLabel === 'template' ? 'border-kraken-orange/40 text-kraken-orange bg-kraken-orange/10' :
+              row.sourceLabel === 'manual' ? 'border-kraken-muted/40 text-kraken-muted bg-kraken-muted/10' :
+              'border-kraken-red/40 text-kraken-red bg-kraken-red/10'
+            }`}>
+              {row.sourceLabel === 'probe' ? 'FFprobe' :
+               row.sourceLabel === 'onvif' ? 'ONVIF' :
+               row.sourceLabel === 'template' ? 'Шаблон' :
+               row.sourceLabel === 'manual' ? 'Ручной' : 'Неизвестно'}
+            </span>
+          )}
         </div>
-        <div>
-          {fieldLabel('GOP')}
-          {fieldInput(row.gop, v => setRow({ ...row, gop: v }), 'number')}
-        </div>
-        <div>
-          {fieldLabel('FPS')}
-          {fieldInput(row.fps, v => setRow({ ...row, fps: v }), 'number')}
-        </div>
-        <div>
-          {fieldLabel('Разрешение')}
-          <select
-            value={row.resolution}
-            onChange={e => setRow({ ...row, resolution: e.target.value })}
-            className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
-          >
-            <option value="1920x1080">1920x1080</option>
-            <option value="1280x720">1280x720</option>
-            <option value="3840x2160">3840x2160 (4K)</option>
-            <option value="2560x1440">2560x1440 (2K)</option>
-            <option value="640x480">640x480</option>
-          </select>
-        </div>
-        <div>
-          {fieldLabel('Битрейт, кбит/с')}
-          {fieldInput(row.bitrate, v => setRow({ ...row, bitrate: v }), 'number')}
+        <div className="grid grid-cols-5 gap-3">
+          <div>
+            {fieldLabel('Кодек')}
+            <select
+              value={row.codec}
+              onChange={e => setRowWithSource({ ...row, codec: e.target.value })}
+              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
+            >
+              <option value="H.264">H.264</option>
+              <option value="H.265">H.265</option>
+            </select>
+          </div>
+          <div>
+            {fieldLabel('GOP')}
+            {fieldInput(row.gop, v => setRowWithSource({ ...row, gop: v }), 'number')}
+          </div>
+          <div>
+            {fieldLabel('FPS')}
+            {fieldInput(row.fps, v => setRowWithSource({ ...row, fps: v }), 'number')}
+          </div>
+          <div>
+            {fieldLabel('Разрешение')}
+            <select
+              value={row.resolution}
+              onChange={e => setRowWithSource({ ...row, resolution: e.target.value })}
+              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple"
+            >
+              <option value="1920x1080">1920x1080</option>
+              <option value="1280x720">1280x720</option>
+              <option value="3840x2160">3840×2160 (4K)</option>
+              <option value="2560x1440">2560×1440 (2K)</option>
+              <option value="640x480">640×480</option>
+            </select>
+          </div>
+          <div>
+            {fieldLabel('Битрейт, кбит/с')}
+            {fieldInput(row.bitrate, v => setRowWithSource({ ...row, bitrate: v }), 'number')}
+          </div>
         </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -1123,9 +1141,9 @@ function ActiveWindowsTab({ camera, settings, loading, saving, onSave, onPopulat
       {loading ? (
         <div className="text-center py-4 text-kraken-disabled text-sm">Загрузка настроек...</div>
       ) : (
-        <>
-          {renderRow(row1, setRow1, 'Строка 1 — Основной поток')}
-          {renderRow(row2, setRow2, 'Строка 2 — Дополнительный поток')}
+      <>
+        {renderRow(row1, setRow1, 'Строка 1 — Основной поток')}
+        {renderRow(row2, setRow2, 'Строка 2 — Дополнительный поток')}
 
           <div className="flex gap-3 mt-2">
             <button onClick={handleSave} disabled={saving} className="btn-primary flex-1">
