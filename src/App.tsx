@@ -300,7 +300,7 @@ export default function App() {
           projectionActive={showProjection}
         />
 
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        <div className="flex-1 flex flex-col h-full overflow-hidden relative">
           {isManualRecording && (
             <div className="absolute top-[4.5rem] right-6 flex items-center gap-2 bg-red-600/90 text-white px-3 py-1.5 rounded-full shadow-[0_0_15px_rgba(220,38,38,0.5)] z-50 animate-pulse font-bold text-sm tracking-widest backdrop-blur-sm border border-red-500/50">
               <div className="w-2.5 h-2.5 bg-white rounded-full"></div>
@@ -308,7 +308,7 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex-1 p-0 overflow-hidden">
+          <div className="flex-1 h-full p-0 overflow-hidden">
             {renderPage()}
           </div>
         </div>
