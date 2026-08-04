@@ -485,6 +485,7 @@ export default function Cameras() {
             {/* Active Windows Tab */}
             {detailTab === 'active-windows' && (
               <ActiveWindowsTab
+                key={detailCamera.id}
                 camera={detailCamera}
                 settings={streamSettings}
                 loading={streamLoading}
@@ -497,6 +498,7 @@ export default function Cameras() {
                       body: JSON.stringify({ row1, row2 }),
                     })
                     setStreamSettings({ row1, row2 })
+                    setAlertState({ isOpen: true, title: 'Готово', message: 'Параметры потоков сохранены' })
                   } catch (e: any) {
                     setAlertState({ isOpen: true, title: 'Ошибка', message: 'Ошибка сохранения: ' + e.message })
                   } finally {
