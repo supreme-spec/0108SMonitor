@@ -4267,6 +4267,40 @@ app.get(["/api/face-engine/status", "/api/face-engine/status/"], (req, res) => {
   res.json(status);
 });
 
+// ── CAMERA STATUS CHECK ──────────────────────────────────────────────────
+app.get("/api/cameras/:id/status-check", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find(c => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+    const result = await probeCamera(cam);
+    const reason = result.connected ? "online" : "error:rtsp_timeout";
+    await prisma.camera.update({ where: { id }, data: { status: reason } }).catch(() => {});
+    res.json({ camera_id: id, status: reason, details: result.details });
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/:id/status-check", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post("/api/cameras/check-all-status", async (req, res) => {
+  try {
+    const dbCams = await prisma.camera.findMany();
+    const results = [];
+    for (const cam of dbCams) {
+      const decrypted = decryptCameraCreds(cam);
+      const result = await probeCamera(decrypted);
+      const reason = result.connected ? "online" : "error:rtsp_timeout";
+      await prisma.camera.update({ where: { id: cam.id }, data: { status: reason } }).catch(() => {});
+      results.push({ camera_id: cam.id, name: cam.name, status: reason, details: result.details });
+    }
+    res.json({ results });
+  } catch (err) {
+    logError(err as Error, { path: "/api/cameras/check-all-status", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
 // ── SETUP / GPU ──
 app.post(["/api/settings/setup/rerun", "/api/settings/setup/rerun/"], async (req, res) => {
   try {
