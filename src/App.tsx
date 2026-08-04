@@ -332,8 +332,8 @@ export default function App() {
 
       {page === 'chronicle' && (
         <div className="fixed inset-0 z-40 flex items-end pointer-events-none">
-          <div className="absolute inset-0 bg-black/60 pointer-events-auto" onClick={() => setPage(prevPage)} />
-          <div className="relative pointer-events-auto w-full h-[40vh] bg-kraken-panel border-t border-kraken-border rounded-t-xl animate-slide-up z-50 flex flex-col shadow-[0_-4px_30px_rgba(0,0,0,0.5)]">
+          <div className="absolute inset-y-0 right-0 left-16 bg-black/60 pointer-events-auto" onClick={() => setPage(prevPage)} />
+          <div className="relative pointer-events-auto w-[calc(100%-64px)] h-[40vh] bg-kraken-panel border-t border-kraken-border rounded-t-xl animate-slide-up z-50 flex flex-col shadow-[0_-4px_30px_rgba(0,0,0,0.5)]">
             <div className="flex items-center justify-between px-4 py-2 border-b border-kraken-border flex-shrink-0">
               <h2 className="text-kraken-text font-bold text-sm">Фотохроника</h2>
               <button onClick={() => setPage(prevPage)} className="text-kraken-muted hover:text-kraken-text transition-colors">
