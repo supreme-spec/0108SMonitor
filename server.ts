@@ -11,10 +11,12 @@ import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn, exec, execSync, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
+import { createRequire } from "module";
 import { FormData } from "formdata-node";
 import { autoFillCamera, inspectCamera, normalizeProbeProfiles, compareProbeResults, recommendAiStreamProfile, type StreamProfile, type CameraProbeResult } from "./camera-inspector.js";
 
 const execAsync = promisify(exec);
+const require = createRequire(import.meta.url);
 import sharp from "sharp";
 import { ZipArchive } from "archiver";
 import * as unzipper from "unzipper";
@@ -318,11 +320,13 @@ let persons: any[] = [];
 // Дефолтные категории — используются только для первичного сида БД
 let categories: any[] = [
   { code: "BLACKLIST", label: "Чёрный список", color: "#ef4444", bg_color: "#450a0a", is_alert: true,  alert_sound: "builtin", alert_volume: 1.0, detect_enabled: true,  sort_order: 1, is_system: true  },
-  { code: "RESPONSE",  label: "Реагирование",  color: "#f97316", bg_color: "#431407", is_alert: true,  alert_sound: "builtin", alert_volume: 0.9, detect_enabled: true,  sort_order: 2, is_system: true  },
-  { code: "VIP",       label: "VIP",            color: "#a855f7", bg_color: "#2e1065", is_alert: true,  alert_sound: "builtin", alert_volume: 0.7, detect_enabled: true,  sort_order: 3, is_system: false },
-  { code: "SECURITY",  label: "Охрана",         color: "#3b82f6", bg_color: "#172554", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 4, is_system: false },
-  { code: "STAFF",     label: "Персонал",       color: "#22c55e", bg_color: "#052e16", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 5, is_system: false },
-  { code: "CLIENT",    label: "Клиент",         color: "#6b7280", bg_color: "#111827", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 6, is_system: false },
+  { code: "NOT_TODAY", label: "Не сегодня",    color: "#f97316", bg_color: "#431407", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 2, is_system: false },
+  { code: "SUITE",     label: "Свита",          color: "#ec4899", bg_color: "#500724", is_alert: true,  alert_sound: "builtin", alert_volume: 0.8, detect_enabled: true,  sort_order: 3, is_system: false },
+  { code: "RESPONSE",  label: "Реагирование",  color: "#f97316", bg_color: "#431407", is_alert: true,  alert_sound: "builtin", alert_volume: 0.9, detect_enabled: true,  sort_order: 4, is_system: true  },
+  { code: "VIP",       label: "VIP",            color: "#a855f7", bg_color: "#2e1065", is_alert: true,  alert_sound: "builtin", alert_volume: 0.7, detect_enabled: true,  sort_order: 5, is_system: false },
+  { code: "SECURITY",  label: "Охрана",         color: "#3b82f6", bg_color: "#172554", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 6, is_system: false },
+  { code: "STAFF",     label: "Персонал",       color: "#22c55e", bg_color: "#052e16", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 7, is_system: false },
+  { code: "CLIENT",    label: "Клиент",         color: "#6b7280", bg_color: "#111827", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 8, is_system: false },
   { code: "EVENT_GUEST", label: "Гость",          color: "#14b8a6", bg_color: "#0a2e2e", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 7, is_system: false,
     card_template_json: JSON.stringify({
       sections: [
@@ -5226,6 +5230,72 @@ app.get(["/api/persons/:id/stats", "/api/persons/:id/stats/"], async (req, res) 
   }
 });
 
+// ── PERSON CATEGORY HISTORY ──
+app.get(["/api/persons/:id/category_history", "/api/persons/:id/category_history/"], async (req, res) => {
+  try {
+    const personId = parseInt(req.params.id);
+    const history = await prisma.personCategoryHistory.findMany({
+      where: { person_id: personId },
+      orderBy: { created_at: "desc" },
+    });
+    res.json(history);
+  } catch (err) {
+    logError(err as Error, { path: "/api/persons/:id/category_history", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post(["/api/persons/:id/category", "/api/persons/:id/category/"], async (req, res) => {
+  try {
+    const personId = parseInt(req.params.id);
+    const { category, reason } = req.body as { category: string; reason?: string };
+
+    if (!category) {
+      return res.status(400).json({ detail: "category is required" });
+    }
+
+    const person = await prisma.person.findUnique({
+      where: { id: personId },
+    });
+
+    if (!person) {
+      return res.status(404).json({ detail: "Person not found" });
+    }
+
+    const oldCode = person.category;
+    const newCode = category.toUpperCase().trim();
+
+    // Create history record
+    await prisma.personCategoryHistory.create({
+      data: {
+        person_id: personId,
+        old_code: oldCode,
+        new_code: newCode,
+        reason: reason || null,
+        changed_by: "operator",
+      },
+    });
+
+    // Update person category
+    const updated = await prisma.person.update({
+      where: { id: personId },
+      data: { category: newCode },
+      include: { photos: true },
+    });
+
+    // Sync in-memory
+    const memPerson = persons.find(p => p.id === personId);
+    if (memPerson) {
+      memPerson.category = newCode;
+    }
+
+    res.json(updated);
+  } catch (err) {
+    logError(err as Error, { path: "/api/persons/:id/category", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
 // Заглушка для скачивания моделей (модели уже в папке models/)
 app.post(["/api/ai/download_models", "/api/ai/download_models/"], async (req, res) => {
   try {
@@ -5799,33 +5869,59 @@ async function seedDatabase() {
    const categoriesFromDB = await prisma.category.findMany({ orderBy: { sort_order: "asc" } });
    categories = categoriesFromDB as any[];
 
-   // Ensure EVENT_GUEST category exists (migration for existing DBs)
-   const existingGuest = categoriesFromDB.find(c => c.code === "EVENT_GUEST");
-   if (!existingGuest) {
-     const eventGuestCardTemplate = JSON.stringify({
-       sections: [
-         { key: "visits",  label: "Посещения", icon: "calendar", type: "visits_history" },
-         { key: "loyalty", label: "Лояльность", icon: "star",    type: "loyalty_score" },
-       ],
-       fields: [
-         { key: "favorite_drink", label: "Напиток",  type: "text",   group: "preferences" },
-         { key: "favorite_table", label: "Столик",   type: "text",   group: "preferences" },
-         { key: "allergies",      label: "Аллергии", type: "text",   group: "preferences" },
-         { key: "vip_level",      label: "VIP уровень", type: "select", group: "preferences", options: ["", "Bronze", "Silver", "Gold", "Platinum"] },
-         { key: "last_order",     label: "Посл. заказ", type: "text", group: "preferences" },
-         { key: "visit_count",    label: "Кол-во визитов", type: "number", group: "stats", readonly: true },
-       ],
-     });
-     await prisma.category.create({
-       data: {
-         code: "EVENT_GUEST", label: "Гость", color: "#14b8a6", bg_color: "#0a2e2e",
-         is_alert: false, alert_sound: "off", alert_volume: 0.5,
-         detect_enabled: true, sort_order: 7, is_system: false,
-         card_template_json: eventGuestCardTemplate,
-       }
-     });
-     logInfo("Создана категория EVENT_GUEST с шаблоном карточки");
-   }
+    // Ensure EVENT_GUEST category exists (migration for existing DBs)
+    const existingGuest = categoriesFromDB.find(c => c.code === "EVENT_GUEST");
+    if (!existingGuest) {
+      const eventGuestCardTemplate = JSON.stringify({
+        sections: [
+          { key: "visits",  label: "Посещения", icon: "calendar", type: "visits_history" },
+          { key: "loyalty", label: "Лояльность", icon: "star",    type: "loyalty_score" },
+        ],
+        fields: [
+          { key: "favorite_drink", label: "Напиток",  type: "text",   group: "preferences" },
+          { key: "favorite_table", label: "Столик",   type: "text",   group: "preferences" },
+          { key: "allergies",      label: "Аллергии", type: "text",   group: "preferences" },
+          { key: "vip_level",      label: "VIP уровень", type: "select", group: "preferences", options: ["", "Bronze", "Silver", "Gold", "Platinum"] },
+          { key: "last_order",     label: "Посл. заказ", type: "text", group: "preferences" },
+          { key: "visit_count",    label: "Кол-во визитов", type: "number", group: "stats", readonly: true },
+        ],
+      });
+      await prisma.category.create({
+        data: {
+          code: "EVENT_GUEST", label: "Гость", color: "#14b8a6", bg_color: "#0a2e2e",
+          is_alert: false, alert_sound: "off", alert_volume: 0.5,
+          detect_enabled: true, sort_order: 7, is_system: false,
+          card_template_json: eventGuestCardTemplate,
+        }
+      });
+      logInfo("Создана категория EVENT_GUEST с шаблоном карточки");
+    }
+
+    // Ensure SUITE category exists (migration for existing DBs)
+    const existingSuite = categoriesFromDB.find(c => c.code === "SUITE");
+    if (!existingSuite) {
+      await prisma.category.create({
+        data: {
+          code: "SUITE", label: "Свита", color: "#ec4899", bg_color: "#500724",
+          is_alert: true, alert_sound: "builtin", alert_volume: 0.8,
+          detect_enabled: true, sort_order: 3, is_system: false,
+        }
+      });
+      logInfo("Создана категория SUITE (Свита)");
+    }
+
+    // Ensure NOT_TODAY category exists (migration for existing DBs)
+    const existingNotToday = categoriesFromDB.find(c => c.code === "NOT_TODAY");
+    if (!existingNotToday) {
+      await prisma.category.create({
+        data: {
+          code: "NOT_TODAY", label: "Не сегодня", color: "#f97316", bg_color: "#431407",
+          is_alert: false, alert_sound: "off", alert_volume: 0.5,
+          detect_enabled: true, sort_order: 2, is_system: false,
+        }
+      });
+      logInfo("Создана категория NOT_TODAY (Не сегодня)");
+    }
 
   // Seed default camera if none exist
   const camCount = await prisma.camera.count();

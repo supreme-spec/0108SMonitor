@@ -1,13 +1,15 @@
 import net from "net";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { promisify } from "util";
+import { createRequire } from "module";
 
 const execAsync = promisify(exec);
+const require = createRequire(import.meta.url);
 
 export interface StreamProfile {
   id: string;
   name: string;
-  type: "main" | "sub" | string;
+  type: "main" | "sub";
   codec: string;
   resolutions: Array<{ width: number; height: number; label: string }>;
   fps: { min?: number; max?: number; current?: number };
@@ -126,7 +128,7 @@ function buildResolutionLabel(width: number, height: number): string {
   return `${width}x${height}`;
 }
 
-function classifyProfileType(index: number, name?: string): "main" | "sub" | string {
+function classifyProfileType(index: number, name?: string): "main" | "sub" {
   if (!name) return index === 0 ? "main" : "sub";
   const lower = name.toLowerCase();
   if (lower.includes("main") || lower.includes("primary") || lower.includes("profile_1")) return "main";
@@ -159,7 +161,7 @@ async function probeRtsp(source: string): Promise<Partial<CameraProbeResult>> {
   ];
   try {
     const { stdout } = await execAsync(`"${probePath}" ${args.map((a) => `"${a}"`).join(" ")}`, {
-      timeout: 10000,
+      timeout: 20000,
     });
     const info: any = {};
     for (const line of stdout.split(/\r?\n/)) {
@@ -183,8 +185,8 @@ async function probeRtsp(source: string): Promise<Partial<CameraProbeResult>> {
       bitrate: info.bit_rate ? parseInt(info.bit_rate, 10) : undefined,
       source: "rtsp",
     };
-      return {
-        main: { codec: profile.codec, width, height, fps, bitrate: profile.bitrate },
+    return {
+      main: { codec: profile.codec, width, height, fps, bitrate: profile.bitrate },
         profiles: [profile],
         transport: "tcp",
         sourceLabel: "rtsp",
@@ -243,7 +245,7 @@ async function probeRtspChannel(sourceBase: string, pathSuffix: string, username
       bitrate: info.bit_rate ? parseInt(info.bit_rate, 10) : undefined,
       source: "rtsp",
     };
-  } catch {
+  } catch (e) {
     console.log(`[PROBE] RTSP channel probe failed: ${pathSuffix}`);
     return null;
   }
@@ -359,8 +361,8 @@ async function onvifProbe(ip: string, port = 80, username?: string, password?: s
         firmware: info.FirmwareVersion,
         serial_number: info.SerialNumber,
         mac_address: info.MACAddress,
-        main: { ...main, codec: main.codec, width: main.resolutions[0]?.width, height: main.resolutions[0]?.height, fps: main.fps.current, bitrate: main.bitrate, gop: main.gop },
-        sub: { ...sub, codec: sub.codec, width: sub.resolutions[0]?.width, height: sub.resolutions[0]?.height, fps: sub.fps.current, bitrate: sub.bitrate, gop: sub.gop },
+        main: { ...main, codec: main.codec, width: main.resolutions[0]?.width, height: main.resolutions[0]?.height, fps: main.fps?.current, bitrate: main.bitrate, gop: main.gop },
+        sub: { ...sub, codec: sub.codec, width: sub.resolutions[0]?.width, height: sub.resolutions[0]?.height, fps: sub.fps?.current, bitrate: sub.bitrate, gop: sub.gop },
         profiles: mappedProfiles,
         onvif: true,
         sourceLabel: "onvif",
@@ -687,12 +689,15 @@ export async function autoFillCamera(input: { ip?: string; port?: number; userna
       result.sub = template.sub;
     }
 
+    const hasRtsp = result.profiles?.some((p) => p.source === "rtsp");
+    const hasOnvif = result.profiles?.some((p) => p.source === "onvif");
+
     if (!result.sourceLabel) {
-      result.sourceLabel = result.profiles?.some((p) => p.source === "onvif" || p.source === "rtsp") ? result.sourceLabel : "template";
+      result.sourceLabel = hasRtsp ? "rtsp" : hasOnvif ? "onvif" : "template";
     }
 
     if (!result.data_confidence || result.data_confidence === "unknown") {
-      result.data_confidence = result.profiles?.some((p) => p.source === "onvif" || p.source === "rtsp") ? result.data_confidence : "template";
+      result.data_confidence = hasRtsp || hasOnvif ? "real" : "template";
     }
   }
 
@@ -713,7 +718,6 @@ function getFfprobePath(): string {
   ];
   for (const p of candidates) {
     try {
-      const { execSync } = require("child_process");
       execSync(`"${p}" -version`, { stdio: "ignore", timeout: 2000 });
       return p;
     } catch {

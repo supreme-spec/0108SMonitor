@@ -9,9 +9,9 @@ interface CategoryPageProps {
 // Map category IDs to their actual category codes in the database
 const categoryCodeMap: Record<string, string> = {
   'stops': 'BLACKLIST',
-  'not_today': 'RESPONSE', // Using RESPONSE as closest equivalent for "not today"
+  'not_today': 'NOT_TODAY',
   'guests': 'CLIENT',
-  'suite': 'VIP',
+  'suite': 'SUITE',
   'staff': 'STAFF',
   'vip': 'VIP'
 }

@@ -1,12 +1,13 @@
 // @ts-nocheck
 // @ts-nocheck
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, Search, Edit2, Trash2, Upload, X, Camera, RefreshCw, ImagePlus, Star, Phone, Mail, MapPin, Building2, Calendar, Eye, AlertTriangle, ThumbsUp, ScanFace, ArrowUpDown, FolderOpen, CheckSquare, Square, Layers, Settings, ChevronDown } from 'lucide-react'
+import { Plus, Search, Edit2, Trash2, Upload, X, Camera, RefreshCw, ImagePlus, Star, Phone, Mail, MapPin, Building2, Calendar, Eye, AlertTriangle, ThumbsUp, ScanFace, ArrowUpDown, FolderOpen, CheckSquare, Square, Layers, Settings, ChevronDown, ArrowRight } from 'lucide-react'
 import type { Person, Category, Camera as CameraType } from '../types'
 import { apiFetch, apiUpload, wsUrl, PHOTO_BASE } from '../api/client'
 import CategoryBadge from '../components/CategoryBadge'
 import { useCategories, fetchCategories, getCategoryByCode } from '../hooks/useCategories'
 import ConfirmModal, { AlertModal } from '../components/ConfirmModal'
+import CategoryChangeModal from '../components/CategoryChangeModal'
 
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return '—'
@@ -35,6 +36,7 @@ export default function People({ initialCategory }: PeopleProps = {}) {
   const [showPhotoSearch, setShowPhotoSearch] = useState(false)
   const [showBulkImport, setShowBulkImport] = useState(false)
   const [showSmartImport, setShowSmartImport] = useState(false)
+  const [showCategoryChange, setShowCategoryChange] = useState(false)
 
   // Вкладки: База лиц (database) и Ошибки эмбеддингов (failed_embeddings)
   const [activeTab, setActiveTab] = useState<'database' | 'failed_embeddings'>('database')
@@ -570,12 +572,20 @@ export default function People({ initialCategory }: PeopleProps = {}) {
          />
        )}
        {showDeleteCategory && (
-        <DeleteCategoryModal
-          categories={categories}
-          onClose={() => setShowDeleteCategory(false)}
-          onDone={() => { setShowDeleteCategory(false); fetchPeople() }}
-        />
-      )}
+         <DeleteCategoryModal
+           categories={categories}
+           onClose={() => setShowDeleteCategory(false)}
+           onDone={() => { setShowDeleteCategory(false); fetchPeople() }}
+         />
+       )}
+       {showCategoryChange && profilePerson && (
+         <CategoryChangeModal
+           personId={profilePerson.id}
+           currentCategory={profilePerson.category}
+           onClose={() => setShowCategoryChange(false)}
+           onSaved={() => { fetchPeople(); if (profilePerson) { setProfilePerson({ ...profilePerson }) } }}
+         />
+       )}
 
       {confirmState && (
         <ConfirmModal
@@ -759,6 +769,7 @@ function PersonProfile({ person, onClose, onEdit }: {
           <RefreshCw size={14} className={reindexing ? 'animate-spin text-kraken-green' : ''} />
         </button>
         <button onClick={onEdit} className="p-1.5 rounded hover:bg-kraken-hover text-kraken-muted hover:text-kraken-purple" title="Редактировать"><Edit2 size={14} /></button>
+        <button onClick={() => setShowCategoryChange(true)} className="p-1.5 rounded hover:bg-kraken-hover text-kraken-muted hover:text-kraken-amber" title="Сменить категорию"><ArrowRight size={14} /></button>
         <button onClick={onClose} className="p-1.5 rounded hover:bg-kraken-hover text-kraken-muted hover:text-kraken-text"><X size={14} /></button>
       </div>
 

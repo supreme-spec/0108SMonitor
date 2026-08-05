@@ -108,6 +108,7 @@ model Person {
   events             Event[]
   descriptors        FaceDescriptor[]
   incidents          Incident[]
+  category_history   PersonCategoryHistory[]
   policies           PersonPolicy[]
   tags               Tag[]
   confirmations      FaceConfirmation[]
@@ -231,6 +232,21 @@ model Incident {
   status        String   @default("open")
   created_at    DateTime @default(now())
   person        Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
+}
+
+model PersonCategoryHistory {
+  id          Int      @id @default(autoincrement())
+  person_id   Int
+  old_code    String?
+  new_code    String
+  reason      String?
+  changed_by  String?  @default("operator")
+  created_at  DateTime @default(now())
+  person      Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
+
+  @@index([person_id])
+  @@index([created_at])
+  @@map("person_category_history")
 }
 
 model Tag {
