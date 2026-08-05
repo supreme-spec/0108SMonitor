@@ -322,6 +322,22 @@ let categories: any[] = [
   { code: "SECURITY",  label: "Охрана",         color: "#3b82f6", bg_color: "#172554", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 4, is_system: false },
   { code: "STAFF",     label: "Персонал",       color: "#22c55e", bg_color: "#052e16", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 5, is_system: false },
   { code: "CLIENT",    label: "Клиент",         color: "#6b7280", bg_color: "#111827", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 6, is_system: false },
+  { code: "EVENT_GUEST", label: "Гость",          color: "#14b8a6", bg_color: "#0a2e2e", is_alert: false, alert_sound: "off",     alert_volume: 0.5, detect_enabled: true,  sort_order: 7, is_system: false,
+    card_template_json: JSON.stringify({
+      sections: [
+        { key: "visits",    label: "Посещения",  icon: "calendar", type: "visits_history" },
+        { key: "loyalty",   label: "Лояльность",  icon: "star",      type: "loyalty_score" },
+      ],
+      fields: [
+        { key: "favorite_drink",   label: "Напиток",       type: "text",    group: "preferences" },
+        { key: "favorite_table",   label: "Столик",        type: "text",    group: "preferences" },
+        { key: "allergies",        label: "Аллергии",      type: "text",    group: "preferences" },
+        { key: "vip_level",        label: "VIP уровень",   type: "select",  group: "preferences", options: ["", "Bronze", "Silver", "Gold", "Platinum"] },
+        { key: "last_order",       label: "Посл. заказ",   type: "text",    group: "preferences" },
+        { key: "visit_count",      label: "Кол-во визитов", type: "number", group: "stats", readonly: true },
+      ],
+    }),
+  },
 ];
 
 const DEFAULT_INCIDENT_TYPES = {
@@ -1297,8 +1313,8 @@ app.post(["/api/categories", "/api/categories/"], async (req, res) => {
         detect_enabled: req.body.detect_enabled !== false,
         sort_order: req.body.sort_order || 100,
         is_system: false,
-      },
-    });
+        card_template_json: req.body.card_template_json ?? null,
+      });
     res.status(201).json(newCat);
   } catch (err) {
     logError(err as Error, { path: "/api/categories", method: "POST" });
@@ -2489,15 +2505,39 @@ app.get(["/api/loyalty/:id", "/api/loyalty/:id/"], async (req, res) => {
     const incidents = await prisma.incident.findMany({ where: { person_id: id }, orderBy: { created_at: "desc" } });
     const tags = await prisma.tag.findMany({ where: { person_id: id } });
 
-    let score = 50; let label = "Клиент"; let color = "#9AA6B2"; let risk = 0;
-    if (person) {
-      if (person.category === "VIP")       { score = 95; label = "Премиум VIP"; color = "#00FF94"; }
-      else if (person.category === "BLACKLIST") { score = 0; label = "Высокий Риск"; color = "#FF3B3B"; risk = 100; }
-      else if (person.category === "STAFF")     { score = 80; label = "Сотрудник"; color = "#3BA4FF"; }
+    const visits = await prisma.personVisit.findMany({
+      where: { person_id: id },
+      select: { visit_date: true },
+      orderBy: { visit_date: "desc" },
+    });
+
+    // Use stored loyalty_index if available, otherwise compute from visits
+    let score: number;
+    if (person?.loyalty_index !== null && person?.loyalty_index !== undefined && person.loyalty_index > 0) {
+      score = Math.round(person.loyalty_index);
+    } else if (visits.length >= 2) {
+      score = calculateLoyaltyIndex(visits);
+      // Persist computed score
+      await prisma.person.update({ where: { id }, data: { loyalty_index: score } }).catch(() => {});
+    } else if (person) {
+      // Fallback to category-based score for persons without visit history
+      if (person.category === "VIP") { score = 95; }
+      else if (person.category === "BLACKLIST") { score = 0; }
+      else if (person.category === "STAFF") { score = 80; }
+      else { score = 50; }
+    } else {
+      score = 50;
     }
 
+    let label: string, label_color: string, color: string, risk: number;
+    if (score >= 90) { label = "Постоянный клиент"; label_color = "#00FF94"; color = "#00FF94"; risk = 0; }
+    else if (score >= 70) { label = "Постоянный"; label_color = "#14b8a6"; color = "#14b8a6"; risk = 0; }
+    else if (score >= 50) { label = "Регулярный"; label_color = "#3b82f6"; color = "#3b82f6"; risk = 0; }
+    else if (score >= 30) { label = "Новый"; label_color = "#f97316"; color = "#f97316"; risk = 0; }
+    else { label = "Новичок"; label_color = "#ef4444"; color = "#ef4444"; risk = 0; }
+
     res.json({
-      loyalty: { score, label, label_color: color, activity: person?.visit_count || 1, activity_max: 20, reputation: Math.round(score / 10), reputation_max: 10, risk, recovery: 100 - risk },
+      loyalty: { score, label, label_color: color, activity: person?.total_visits || person?.visit_count || 0, activity_max: 20, reputation: Math.round(score / 10), reputation_max: 10, risk, recovery: 100 - risk, loyalty_index: person?.loyalty_index || score },
       incidents,
       tags,
       incident_types: DEFAULT_INCIDENT_TYPES,
@@ -2512,13 +2552,21 @@ app.get(["/api/loyalty/:id", "/api/loyalty/:id/"], async (req, res) => {
 app.get(["/api/loyalty/:id/visits", "/api/loyalty/:id/visits/"], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const person = await prisma.person.findUnique({ where: { id }, select: { visit_count: true, last_seen_at: true } });
-    const monthNames = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
-    const now = new Date();
-    const monthStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
-    const label = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
-    res.json({ months: [{ month: monthStr, label, count: person?.visit_count || 0, visits: [] }] });
+    const visits = await prisma.personVisit.findMany({
+      where: { person_id: id },
+      orderBy: { visit_date: "desc" },
+    });
+    const totalVisits = visits.length;
+    const loyaltyIndex = (await prisma.person.findUnique({ where: { id }, select: { loyalty_index: true } }))?.loyalty_index || 0;
+
+    res.json({
+      person_id: id,
+      total_visits: totalVisits,
+      loyalty_index: loyaltyIndex,
+      visits,
+    });
   } catch (err) {
+    logError(err as Error, { path: "/api/loyalty/:id/visits" });
     res.status(500).json({ detail: "Internal server error" });
   }
 });
@@ -3539,13 +3587,50 @@ async function handleRecognizedEvent(cam: any, match: any, frameBase64: string) 
       where: { id: match.personId },
       data: { visit_count: { increment: 1 }, last_seen_at: new Date() },
     });
+    // Record visit in person_visits table and recalculate loyalty
+    try {
+      await prisma.personVisit.create({
+        data: {
+          person_id: match.personId,
+          camera_id: cam.id,
+          camera_name: cam.name,
+          confidence: confidence,
+          source: "recognition",
+        },
+      });
+      const visits = await prisma.personVisit.findMany({
+        where: { person_id: match.personId },
+        select: { visit_date: true },
+        orderBy: { visit_date: "desc" },
+      });
+      const loyalty = calculateLoyaltyIndex(visits);
+      await prisma.person.update({
+        where: { id: match.personId },
+        data: { loyalty_index: loyalty, total_visits: { increment: 1 } },
+      });
+    } catch { /* ignore */ }
   } catch { /* ignore */ }
   const idx = persons.findIndex((p: any) => p.id === match.personId);
   if (idx >= 0) {
     persons[idx].visit_count = (persons[idx].visit_count || 0) + 1;
     persons[idx].last_seen_at = new Date().toISOString();
+    persons[idx].total_visits = (persons[idx].total_visits || 0) + 1;
   }
   const person = idx >= 0 ? persons[idx] : undefined;
+
+  // Update loyalty_index in cache (async, non-blocking)
+  if (idx >= 0) {
+    (async () => {
+      try {
+        const visits = await prisma.personVisit.findMany({
+          where: { person_id: match.personId },
+          select: { visit_date: true },
+          orderBy: { visit_date: "desc" },
+        });
+        persons[idx].loyalty_index = calculateLoyaltyIndex(visits);
+      } catch { /* ignore */ }
+    })();
+  }
 
   await persistAndBroadcastEvent({
     cameraId: cam.id,
@@ -4469,6 +4554,119 @@ app.post(["/api/persons/:id/reindex", "/api/persons/:id/reindex/"], async (req, 
     res.status(500).json({ detail: "Internal server error" });
   }
 });
+//
+// Person Visits API
+// ── LIST VISITS ──
+app.get(["/api/persons/:id/visits", "/api/persons/:id/visits/"], async (req, res) => {
+  try {
+    const personId = parseInt(req.params.id);
+    const person = await prisma.person.findUnique({ where: { id: personId } });
+    if (!person) return res.status(404).json({ detail: "Person not found" });
+
+    const limit = parseInt(req.query.limit as string) || 100;
+    const visits = await prisma.personVisit.findMany({
+      where: { person_id: personId },
+      orderBy: { visit_date: "desc" },
+      take: limit,
+    });
+    res.json(visits);
+  } catch (err) {
+    logError(err as Error, { path: "/api/persons/:id/visits", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+// ── ADD VISIT (manual) ──
+app.post(["/api/persons/:id/visits", "/api/persons/:id/visits/"], async (req, res) => {
+  try {
+    const personId = parseInt(req.params.id);
+    const person = await prisma.person.findUnique({ where: { id: personId } });
+    if (!person) return res.status(404).json({ detail: "Person not found" });
+
+    const { visit_date, camera_id, source } = req.body;
+    const visit = await prisma.personVisit.create({
+      data: {
+        person_id: personId,
+        camera_id: camera_id || null,
+        source: source || "manual",
+        visit_date: visit_date ? new Date(visit_date) : new Date(),
+      },
+    });
+
+    // Recalculate loyalty_index
+    const visits = await prisma.personVisit.findMany({
+      where: { person_id: personId },
+      select: { visit_date: true },
+      orderBy: { visit_date: "desc" },
+    });
+    const loyalty = calculateLoyaltyIndex(visits);
+    await prisma.person.update({
+      where: { id: personId },
+      data: {
+        loyalty_index: loyalty,
+        total_visits: { increment: 1 },
+        visit_count: { increment: 1 },
+        last_seen_at: new Date(),
+      },
+    });
+
+    const idx = persons.findIndex((p: any) => p.id === personId);
+    if (idx >= 0) {
+      persons[idx].loyalty_index = loyalty;
+      persons[idx].total_visits = (persons[idx].total_visits || 0) + 1;
+      persons[idx].visit_count = (persons[idx].visit_count || 0) + 1;
+      persons[idx].last_seen_at = new Date().toISOString();
+    }
+
+    res.status(201).json(visit);
+  } catch (err) {
+    logError(err as Error, { path: "/api/persons/:id/visits", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+// ── PERSON STATS ──
+app.get(["/api/persons/:id/stats", "/api/persons/:id/stats/"], async (req, res) => {
+  try {
+    const personId = parseInt(req.params.id);
+    const person = await prisma.person.findUnique({ where: { id: personId } });
+    if (!person) return res.status(404).json({ detail: "Person not found" });
+
+    const visits = await prisma.personVisit.findMany({
+      where: { person_id: personId },
+      orderBy: { visit_date: "asc" },
+    });
+
+    const firstSeen = visits.length > 0 ? visits[0].visit_date : person.created_at;
+    const lastSeen = visits.length > 0 ? visits[visits.length - 1].visit_date : person.last_seen_at;
+    const totalVisits = visits.length;
+    const loyaltyIndex = person.loyalty_index || 0;
+
+    // Average visits per month
+    const now = new Date();
+    const first = new Date(firstSeen);
+    const monthsActive = Math.max(1, (now.getFullYear() - first.getFullYear()) * 12 + (now.getMonth() - first.getMonth()));
+    const avgVisitsPerMonth = totalVisits / monthsActive;
+
+    // Days since last visit
+    const daysSinceLast = lastSeen
+      ? Math.floor((now.getTime() - new Date(lastSeen).getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+
+    res.json({
+      person_id: personId,
+      first_seen: firstSeen,
+      last_seen: lastSeen,
+      total_visits: totalVisits,
+      loyalty_index: loyaltyIndex,
+      avg_visits_per_month: Math.round(avgVisitsPerMonth * 10) / 10,
+      days_since_last_visit: daysSinceLast,
+    });
+  } catch (err) {
+    logError(err as Error, { path: "/api/persons/:id/stats" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
 
 // Заглушка для скачивания моделей (модели уже в папке models/)
 app.post(["/api/ai/download_models", "/api/ai/download_models/"], async (req, res) => {
@@ -4895,25 +5093,134 @@ app.get("/api/reports/pdf", async (req, res) => {
 });
 
 // ── VITE MIDDLEWARE OR STATIC SERVER ──
+
+/**
+ * Вычисляет индекс лояльности на основе истории посещений (упрощённая формула).
+ * Использует паттерн: средний интервал между последними 10 визитами → 0–100.
+ */
+function calculateLoyaltyIndex(visits: Array<{ visit_date: string | Date }>): number {
+  if (!visits || visits.length < 2) return 0;
+  // Сортируем по убыванию даты (самый свежий первым)
+  const sorted = [...visits].sort((a, b) =>
+    new Date(b.visit_date).getTime() - new Date(a.visit_date).getTime()
+  );
+  const recent = sorted.slice(0, Math.min(10, sorted.length));
+
+  // Интервалы между посещениями в днях
+  const intervals: number[] = [];
+  for (let i = 0; i < recent.length - 1; i++) {
+    const diff = (new Date(recent[i].visit_date).getTime() - new Date(recent[i + 1].visit_date).getTime()) / (1000 * 60 * 60 * 24);
+    if (diff > 0) intervals.push(diff);
+  }
+  if (intervals.length === 0) return 0;
+
+  const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
+  if (avgInterval <= 0) return 0;
+
+  // Чем короче интервал — тем выше лояльность
+  // 1 день → 100, 3 дня → ~85, 7 дней → ~65, 14 дней → ~45, 30 дней → ~25, 60+ дней → ~10
+  let score: number;
+  if (avgInterval <= 1) score = 100;
+  else if (avgInterval <= 3) score = 90 - (avgInterval - 1) * 2.5;
+  else if (avgInterval <= 7) score = 85 - (avgInterval - 3) * 5;
+  else if (avgInterval <= 14) score = 65 - (avgInterval - 7) * 3;
+  else if (avgInterval <= 30) score = 45 - (avgInterval - 14) * 0.8;
+  else if (avgInterval <= 60) score = 25 - (avgInterval - 30) * 0.3;
+  else score = 10;
+
+  // Бонус за количество визитов (максимум +15)
+  const visitBonus = Math.min(15, visits.length * 1.5);
+  score = Math.min(100, score + visitBonus);
+
+  return Math.round(score);
+}
+
+/**
+ * Взвешенная лояльность (полнная формула из дизайна).
+ * activity + reputation − risk + recovery → 0–100.
+ * Используется для детального расчёта в /api/loyalty/:id.
+ */
+function calculateLoyaltyBreakdown(visits: Array<{ visit_date: string | Date }>, incidents: any[] = [], tags: any[] = []): {
+  score: number; label: string; label_color: string; color: string;
+  activity: number; activity_max: number; reputation: number; reputation_max: number;
+  risk: number; recovery: number;
+} {
+  const baseIndex = calculateLoyaltyIndex(visits);
+
+  const incidentRisk = Math.min(100, (incidents || []).length * 20);
+  const tagBonus = Math.min(15, (tags || []).length * 5);
+  const score = Math.max(0, Math.min(100, baseIndex + tagBonus - incidentRisk));
+
+  let label: string; let label_color: string; let color: string;
+  if (score >= 90) { label = "Постоянный клиент"; label_color = "#00FF94"; color = "#00FF94"; }
+  else if (score >= 70) { label = "Постоянный"; label_color = "#14b8a6"; color = "#14b8a6"; }
+  else if (score >= 50) { label = "Регулярный"; label_color = "#3b82f6"; color = "#3b82f6"; }
+  else if (score >= 30) { label = "Новый"; label_color = "#f97316"; color = "#f97316"; }
+  else if (score >= 10) { label = "Редкий"; label_color = "#9AA6B2"; color = "#9AA6B2"; }
+  else { label = "Новичок"; label_color = "#ef4444"; color = "#ef4444"; }
+
+  return {
+    score,
+    label,
+    label_color,
+    color,
+    activity: Math.min(20, Math.floor(visits.length / 2)),
+    activity_max: 20,
+    reputation: Math.floor(score / 10),
+    reputation_max: 10,
+    risk: incidentRisk,
+    recovery: 100 - incidentRisk,
+  };
+}
+
 async function seedDatabase() {
   // Seed default categories if DB is empty
   const catCount = await prisma.category.count();
   if (catCount === 0) {
     logInfo("База данных пуста. Заполнение базовых категорий...");
-    for (const cat of categories) {
-      await prisma.category.create({
-        data: {
-          code: cat.code, label: cat.label, color: cat.color, bg_color: cat.bg_color,
-          is_alert: cat.is_alert, alert_sound: cat.alert_sound, alert_volume: cat.alert_volume,
-          detect_enabled: cat.detect_enabled, sort_order: cat.sort_order, is_system: cat.is_system,
-        }
-      });
-    }
+     for (const cat of categories) {
+       await prisma.category.create({
+         data: {
+           code: cat.code, label: cat.label, color: cat.color, bg_color: cat.bg_color,
+           is_alert: cat.is_alert, alert_sound: cat.alert_sound, alert_volume: cat.alert_volume,
+           detect_enabled: cat.detect_enabled, sort_order: cat.sort_order, is_system: cat.is_system,
+           card_template_json: cat.card_template_json ?? null,
+         }
+       });
+     }
   }
 
-  // Sync in-memory categories from DB
-  const categoriesFromDB = await prisma.category.findMany({ orderBy: { sort_order: "asc" } });
-  categories = categoriesFromDB as any[];
+   // Sync in-memory categories from DB
+   const categoriesFromDB = await prisma.category.findMany({ orderBy: { sort_order: "asc" } });
+   categories = categoriesFromDB as any[];
+
+   // Ensure EVENT_GUEST category exists (migration for existing DBs)
+   const existingGuest = categoriesFromDB.find(c => c.code === "EVENT_GUEST");
+   if (!existingGuest) {
+     const eventGuestCardTemplate = JSON.stringify({
+       sections: [
+         { key: "visits",  label: "Посещения", icon: "calendar", type: "visits_history" },
+         { key: "loyalty", label: "Лояльность", icon: "star",    type: "loyalty_score" },
+       ],
+       fields: [
+         { key: "favorite_drink", label: "Напиток",  type: "text",   group: "preferences" },
+         { key: "favorite_table", label: "Столик",   type: "text",   group: "preferences" },
+         { key: "allergies",      label: "Аллергии", type: "text",   group: "preferences" },
+         { key: "vip_level",      label: "VIP уровень", type: "select", group: "preferences", options: ["", "Bronze", "Silver", "Gold", "Platinum"] },
+         { key: "last_order",     label: "Посл. заказ", type: "text", group: "preferences" },
+         { key: "visit_count",    label: "Кол-во визитов", type: "number", group: "stats", readonly: true },
+       ],
+     });
+     await prisma.category.create({
+       data: {
+         code: "EVENT_GUEST", label: "Гость", color: "#14b8a6", bg_color: "#0a2e2e",
+         is_alert: false, alert_sound: "off", alert_volume: 0.5,
+         detect_enabled: true, sort_order: 7, is_system: false,
+         card_template_json: eventGuestCardTemplate,
+       }
+     });
+     logInfo("Создана категория EVENT_GUEST с шаблоном карточки");
+   }
 
   // Seed default camera if none exist
   const camCount = await prisma.camera.count();

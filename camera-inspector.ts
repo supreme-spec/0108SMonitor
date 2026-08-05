@@ -165,6 +165,114 @@ async function probeRtsp(source: string): Promise<Partial<CameraProbeResult>> {
   }
 }
 
+let onvifCam: any = null;
+let onvifWarned = false;
+
+function getOnvifCam() {
+  if (onvifCam) return onvifCam;
+  try {
+    const { Cam } = require("onvif");
+    onvifCam = Cam;
+    return onvifCam;
+  } catch (e) {
+    if (!onvifWarned) {
+      console.warn("ONVIF provider unavailable:", (e as Error).message);
+      onvifWarned = true;
+    }
+    return null;
+  }
+}
+
+async function onvifProbe(ip: string, port = 80, username?: string, password?: string): Promise<Partial<CameraProbeResult>> {
+  const Cam = getOnvifCam();
+  if (!Cam) return {};
+
+  const paths = ["/onvif/device_service", "/cgi-bin/onvif.cgi"];
+  const errors: string[] = [];
+
+  for (const path of paths) {
+    const cam = new Cam({ hostname: ip, username, password, port, path });
+    const connected = await Promise.race([
+      new Promise<boolean>((resolve) => {
+        cam.once("connected", () => resolve(true));
+        cam.once("error", () => resolve(false));
+        try {
+          cam.connect();
+        } catch {
+          resolve(false);
+        }
+        setTimeout(() => {
+          try { cam.disconnect(); } catch {}
+          resolve(false);
+        }, 4000);
+      }),
+    ]);
+
+    if (!connected) continue;
+
+    try {
+      const info = await Promise.race([
+        new Promise<any>((resolve) => {
+          cam.getDeviceInformation((err: any, data: any) => {
+            if (err) resolve({});
+            else resolve(data || {});
+          });
+        }),
+        new Promise<any>((resolve) => setTimeout(() => resolve({}), 4000)),
+      ]);
+
+      const profiles: any[] = await Promise.race([
+        new Promise<any>((resolve) => {
+          cam.getProfiles((err: any, data: any) => {
+            if (err) resolve([]);
+            else resolve(Array.isArray(data) ? data : []);
+          });
+        }),
+        new Promise<any>((resolve) => setTimeout(() => resolve([]), 4000)),
+      ]);
+
+      const mappedProfiles = profiles.map((p: any) => {
+        const cfg = p?.VideoEncoderConfiguration || {};
+        const width = cfg?.Resolution?.["Width"] || cfg?.width;
+        const height = cfg?.Resolution?.["Height"] || cfg?.height;
+        return {
+          name: p?.Name,
+          codec: cfg?.Encoding,
+          width: typeof width === "number" ? width : Number(width),
+          height: typeof height === "number" ? height : Number(height),
+          fps: cfg?.FrameRateLimit || cfg?.fps,
+          bitrate: cfg?.Bitrate || cfg?.bitrate,
+          gop: cfg?.GovLength || cfg?.gop,
+          source: "onvif",
+        };
+      }).filter((p: any) => p.width && p.height);
+
+      if (mappedProfiles.length === 0) continue;
+
+      const main = mappedProfiles[0];
+      const sub = mappedProfiles[1] || mappedProfiles[0];
+
+      return {
+        vendor: info.Manufacturer,
+        model: info.Model,
+        firmware: info.FirmwareVersion,
+        serial_number: info.SerialNumber,
+        mac_address: info.MACAddress,
+        main: { ...main },
+        sub: { ...sub },
+        profiles: mappedProfiles,
+        onvif: true,
+        sourceLabel: "onvif",
+      };
+    } catch (e) {
+      errors.push(`ONVIF ${path}: ${(e as Error).message}`);
+      continue;
+    }
+  }
+
+  return { errors: errors.length ? errors : ["ONVIF not reachable"] };
+}
+
 export async function inspectCamera(ip: string, port = 554, username?: string, password?: string): Promise<CameraProbeResult> {
   const result: CameraProbeResult = {
     reachable: false,
@@ -184,6 +292,9 @@ export async function inspectCamera(ip: string, port = 554, username?: string, p
     `rtsp://${username ? encodeURIComponent(username) + ":" + encodeURIComponent(password) + "@" : ""}${ip}:${port}/live.sdp`,
   ];
 
+  const onvifResult = await onvifProbe(ip, 80, username, password);
+  const rtspPort = port;
+
   for (const source of candidates) {
     const probe = await probeRtsp(source);
     if (probe.main?.codec || probe.main?.width) {
@@ -192,7 +303,14 @@ export async function inspectCamera(ip: string, port = 554, username?: string, p
     }
   }
 
-  if (!result.source) {
+  if (onvifResult.main || onvifResult.profiles?.length) {
+    Object.assign(result, onvifResult);
+    if (!result.source && onvifResult.profiles?.length) {
+      result.source = `rtsp://${username ? encodeURIComponent(username) + ":" + encodeURIComponent(password) + "@" : ""}${ip}:${rtspPort}/Streaming/Channels/101?tcp_transport=tcp`;
+    }
+  }
+
+  if (!result.source && !result.profiles?.length) {
     result.errors?.push("No RTSP stream detected");
   }
 
@@ -215,7 +333,7 @@ export async function autoFillCamera(input: { ip?: string; port?: number; userna
     const probe = await inspectCamera(input.ip, input.port || 554, input.username, input.password);
     Object.assign(result, probe);
     if (result.main && !template) {
-      result.sourceLabel = "rtsp";
+      result.sourceLabel = result.sourceLabel || "rtsp";
     }
   }
 

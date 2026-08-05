@@ -96,6 +96,10 @@ model Person {
   last_seen_at    DateTime?
   visit_count     Int                @default(0)
   embedding_count Int                @default(0)
+  loyalty_index   Float              @default(0.0)
+  total_visits    Int                @default(0)
+  vip_level       String?
+  custom_fields_json String?
   episode_persons EpisodePerson[]
 
   // Импорт персонала
@@ -110,6 +114,24 @@ model Person {
   incidents       Incident[]
   policies        PersonPolicy[]
   tags            Tag[]
+  visits          PersonVisit[]
+}
+
+model PersonVisit {
+  id           Int      @id @default(autoincrement())
+  person_id    Int
+  camera_id    Int?
+  camera_name  String?
+  confidence   Float?
+  visit_date   DateTime @default(now())
+  source       String   @default("recognition")
+  created_at   DateTime @default(now())
+  person       Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
+
+  @@index([person_id])
+  @@index([person_id, visit_date])
+  @@index([visit_date])
+  @@map("person_visits")
 }
 
 model FaceDescriptor {

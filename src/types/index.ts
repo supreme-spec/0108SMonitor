@@ -11,6 +11,7 @@ export interface PersonCategory {
   detect_enabled: boolean
   sort_order: number
   is_system: boolean
+  card_template_json?: string | null
 }
 
 export interface PersonPhoto {
@@ -39,6 +40,10 @@ export interface Person {
   last_seen_at?: string | null
   visit_count: number
   embedding_count: number
+  loyalty_index?: number | null
+  total_visits?: number | null
+  vip_level?: string | null
+  custom_fields_json?: string | null
 }
 
 export interface RoiZone {
@@ -157,4 +162,36 @@ export interface ConfirmationMessage {
   temp_photo: string      // захваченный кадр (новое фото лица) — `/confirmations/...jpg`
   existing_photo: string | null  // фото из базы (зарегистрированное) — `/photos/...jpg`
   timestamp?: string
+}
+
+export interface PersonVisit {
+  id: number
+  person_id: number
+  camera_id?: number | null
+  camera_name?: string | null
+  confidence?: number | null
+  visit_date: string
+  source: string
+  created_at: string
+}
+
+export interface CategoryTemplateSection {
+  key: string
+  label: string
+  icon?: string
+  type: string
+}
+
+export interface CategoryTemplateField {
+  key: string
+  label: string
+  type: 'text' | 'number' | 'select' | 'textarea' | 'date' | 'bool'
+  group: string
+  readonly?: boolean
+  options?: string[]
+}
+
+export interface CategoryCardTemplate {
+  sections: CategoryTemplateSection[]
+  fields: CategoryTemplateField[]
 }
