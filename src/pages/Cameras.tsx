@@ -260,7 +260,7 @@ export default function Cameras() {
             {/* Badges */}
             <div className="flex items-center gap-2 flex-wrap text-xs text-kraken-muted">
               <span className="bg-kraken-hover px-2 py-0.5 rounded">{cam.camera_type}</span>
-              {cam.brand && <span className="bg-kraken-blue/10 text-kraken-blue px-2 py-0.5 rounded">{cam.brand}</span>}
+              {cam.vendor && <span className="bg-kraken-blue/10 text-kraken-blue px-2 py-0.5 rounded">{cam.vendor}</span>}
               {cam.model_name && <span className="bg-kraken-hover px-2 py-0.5 rounded text-kraken-text">{cam.model_name}</span>}
               {cam.zone && <span className="bg-kraken-hover px-2 py-0.5 rounded">{cam.zone}</span>}
               {cam.status === 'online' && cam.fps != null && (

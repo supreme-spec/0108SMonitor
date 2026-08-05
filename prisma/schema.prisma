@@ -35,22 +35,34 @@ model Camera {
    exclusion_zones      String?
    webhookSecret        String?   @unique // UNV LAPI webhook authentication secret
    
+   // Camera passport / inspector
+   vendor               String?
+   model_name           String?
+   firmware             String?
+   serial_number        String?
+   mac_address          String?
+   onvif_supported      Boolean   @default(false)
+   probe_source         String?   // onvif | rtsp | template | manual
+   probe_updated_at     DateTime?
+   stream_profiles      String?   // JSON: [{name, codec, width, height, fps, bitrate, gop, source}]
+   
    events               Event[]
   recordings           Recording[]
 }
 
 model Category {
-  id             Int     @id @default(autoincrement())
-  code           String  @unique
-  label          String
-  color          String
-  bg_color       String
-  is_alert       Boolean @default(false)
-  alert_sound    String  @default("off")
-  alert_volume   Float   @default(0.5)
-  detect_enabled Boolean @default(true)
-  sort_order     Int     @default(100)
-  is_system      Boolean @default(false)
+  id                  Int     @id @default(autoincrement())
+  code                String  @unique
+  label               String
+  color               String
+  bg_color            String
+  is_alert            Boolean @default(false)
+  alert_sound         String  @default("off")
+  alert_volume        Float   @default(0.5)
+  detect_enabled      Boolean @default(true)
+  sort_order          Int     @default(100)
+  is_system           Boolean @default(false)
+  card_template_json  String?
 }
 
 model Guest {

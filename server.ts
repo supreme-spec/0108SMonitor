@@ -1182,9 +1182,80 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
     const row2 = mapToRow(result.sub || result.main);
 
     streamSettings.set(id, { row1, row2 });
-    res.json({ success: true, row1, row2, sourceLabel: result.sourceLabel, vendor: result.vendor, model: result.model });
+
+    const profiles = [
+      result.main ? { ...result.main, source: result.sourceLabel } : undefined,
+      result.sub ? { ...result.sub, source: result.sourceLabel } : undefined,
+    ].filter(Boolean);
+
+    await prisma.camera.update({
+      where: { id },
+      data: {
+        vendor: result.vendor || cam.vendor,
+        model_name: result.model || cam.model_name,
+        firmware: result.firmware || cam.firmware,
+        serial_number: result.serial_number || cam.serial_number,
+        mac_address: result.mac_address || cam.mac_address,
+        onvif_supported: result.onvif ?? cam.onvif_supported,
+        probe_source: result.sourceLabel || cam.probe_source,
+        probe_updated_at: new Date(),
+        stream_profiles: profiles.length ? JSON.stringify(profiles) : cam.stream_profiles,
+      },
+    });
+
+    const updated = cameras.find((c) => c.id === id);
+    if (updated) {
+      Object.assign(updated, {
+        vendor: result.vendor || cam.vendor,
+        model_name: result.model || cam.model_name,
+        firmware: result.firmware || cam.firmware,
+        serial_number: result.serial_number || cam.serial_number,
+        mac_address: result.mac_address || cam.mac_address,
+        onvif_supported: result.onvif ?? cam.onvif_supported,
+        probe_source: result.sourceLabel || cam.probe_source,
+        stream_profiles: profiles.length ? JSON.stringify(profiles) : cam.stream_profiles,
+      });
+    }
+
+    res.json({
+      success: true,
+      row1,
+      row2,
+      sourceLabel: result.sourceLabel,
+      vendor: result.vendor,
+      model: result.model,
+      firmware: result.firmware,
+      serial_number: result.serial_number,
+      mac_address: result.mac_address,
+      onvif: result.onvif,
+      profiles,
+    });
   } catch (e: any) {
     logError(e as Error, { path: "/api/cameras/:id/stream-settings/populate", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.get(["/api/cameras/:id/passport", "/api/cameras/:id/passport/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    const profiles = cam.stream_profiles ? JSON.parse(cam.stream_profiles) : [];
+    res.json({
+      vendor: cam.vendor,
+      model: cam.model_name,
+      firmware: cam.firmware,
+      serial_number: cam.serial_number,
+      mac_address: cam.mac_address,
+      onvif: cam.onvif_supported,
+      source: cam.probe_source,
+      updated_at: cam.probe_updated_at,
+      profiles,
+    });
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/:id/passport", method: "GET" });
     res.status(500).json({ detail: "Internal server error" });
   }
 });

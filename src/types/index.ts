@@ -68,15 +68,28 @@ export interface Camera {
   ping_ms?: number | null
   is_smart_recording: boolean
   is_chronicle: boolean
-  // IP Camera fields
   driver_type?: string | null
   ip_address?: string | null
   ip_port?: number | null
   username?: string | null
   password?: string | null
   use_camera_analytics?: boolean
-  brand?: string | null
+  enabled_modules?: string | null
+  motion_threshold?: number | null
+  motion_zones?: string | null
+  lpr_enabled?: boolean
+  lpr_regions?: string | null
+  exclusion_zones?: string | null
+  webhookSecret?: string | null
+  vendor?: string | null
   model_name?: string | null
+  firmware?: string | null
+  serial_number?: string | null
+  mac_address?: string | null
+  onvif_supported?: boolean
+  probe_source?: string | null
+  probe_updated_at?: string | null
+  stream_profiles?: string | null
 }
 
 export interface KrakenEvent {

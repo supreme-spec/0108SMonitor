@@ -9,6 +9,8 @@ export interface CameraProbeResult {
   vendor?: string;
   model?: string;
   firmware?: string;
+  serial_number?: string;
+  mac_address?: string;
   source?: string;
   main?: {
     codec?: string;
@@ -26,6 +28,16 @@ export interface CameraProbeResult {
     bitrate?: number;
     gop?: number;
   };
+  profiles?: Array<{
+    name?: string;
+    codec?: string;
+    width?: number;
+    height?: number;
+    fps?: number;
+    bitrate?: number;
+    gop?: number;
+    source?: string;
+  }>;
   transport?: "tcp" | "udp";
   onvif?: boolean;
   sourceLabel?: "onvif" | "rtsp" | "template" | "manual";
