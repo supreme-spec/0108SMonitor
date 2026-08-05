@@ -12,7 +12,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, exec, execSync, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 import { FormData } from "formdata-node";
-import { autoFillCamera, inspectCamera } from "./camera-inspector.js";
+import { autoFillCamera, inspectCamera, normalizeProbeProfiles, compareProbeResults, recommendAiStreamProfile, type StreamProfile, type CameraProbeResult } from "./camera-inspector.js";
 
 const execAsync = promisify(exec);
 import sharp from "sharp";
@@ -1199,10 +1199,14 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
 
     streamSettings.set(id, { row1, row2 });
 
-    const profiles = [
-      result.main ? { ...result.main, source: result.sourceLabel } : undefined,
-      result.sub ? { ...result.sub, source: result.sourceLabel } : undefined,
-    ].filter(Boolean);
+    const profiles = normalizeProbeProfiles(result);
+    const sourceLabel = resolveSourceLabel(result, cam) || "rtsp";
+    const conflicts = (result.conflicts && result.conflicts.length) ? result.conflicts : undefined;
+    const streamProfilesJson = profiles.length
+      ? serializeStreamProfiles(profiles, conflicts)
+      : cam.stream_profiles;
+
+    const aiStreamProfileId = profiles.length ? recommendAiStreamProfile(profiles) : null;
 
     await prisma.camera.update({
       where: { id },
@@ -1213,9 +1217,12 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
         serial_number: result.serial_number || cam.serial_number,
         mac_address: result.mac_address || cam.mac_address,
         onvif_supported: result.onvif ?? cam.onvif_supported,
-        probe_source: result.sourceLabel || cam.probe_source,
+        probe_source: sourceLabel || cam.probe_source,
         probe_updated_at: new Date(),
-        stream_profiles: profiles.length ? JSON.stringify(profiles) : cam.stream_profiles,
+        data_confidence: result.data_confidence || cam.data_confidence,
+        last_verified_at: new Date(),
+        stream_profiles: streamProfilesJson,
+        ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
       },
     });
 
@@ -1228,8 +1235,11 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
         serial_number: result.serial_number || cam.serial_number,
         mac_address: result.mac_address || cam.mac_address,
         onvif_supported: result.onvif ?? cam.onvif_supported,
-        probe_source: result.sourceLabel || cam.probe_source,
-        stream_profiles: profiles.length ? JSON.stringify(profiles) : cam.stream_profiles,
+        probe_source: sourceLabel || cam.probe_source,
+        data_confidence: result.data_confidence || cam.data_confidence,
+        last_verified_at: new Date().toISOString(),
+        stream_profiles: streamProfilesJson,
+        ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
       });
     }
 
@@ -1237,7 +1247,7 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
       success: true,
       row1,
       row2,
-      sourceLabel: result.sourceLabel,
+      sourceLabel,
       vendor: result.vendor,
       model: result.model,
       firmware: result.firmware,
@@ -1245,6 +1255,10 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
       mac_address: result.mac_address,
       onvif: result.onvif,
       profiles,
+      conflicts,
+      data_confidence: result.data_confidence,
+      ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
+      last_verified_at: new Date().toISOString(),
     });
   } catch (e: any) {
     logError(e as Error, { path: "/api/cameras/:id/stream-settings/populate", method: "POST" });
@@ -1252,26 +1266,383 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
   }
 });
 
+/** Безопасно разбирает stream_profiles JSON в формате {profiles: [...], conflicts: [...]} */
+function parseStreamProfiles(cam: any): { profiles: StreamProfile[]; conflicts?: any[] } {
+  if (!cam.stream_profiles) return { profiles: [] };
+  try {
+    const parsed = JSON.parse(cam.stream_profiles);
+    const normalize = (p: any, index: number): StreamProfile => {
+      if (p && p.resolutions && p.fps) return p as StreamProfile;
+      const w = p.width || 0;
+      const h = p.height || 0;
+      const f = p.fps || 0;
+      return {
+        id: p.id || `profile_${index}`,
+        name: p.name || (index === 0 ? "Main" : "Sub"),
+        type: p.type || (index === 0 ? "main" : "sub"),
+        codec: p.codec || "H.264",
+        resolutions: [{ width: w, height: h, label: `${w}x${h}` }],
+        fps: { min: f, max: f, current: f },
+        bitrate: p.bitrate,
+        gop: p.gop,
+        source: p.source || "manual",
+      };
+    };
+    if (Array.isArray(parsed)) {
+      return { profiles: parsed.map(normalize), conflicts: undefined };
+    }
+    if (parsed && typeof parsed === "object") {
+      return {
+        profiles: Array.isArray(parsed.profiles) ? parsed.profiles.map(normalize) : [],
+        conflicts: Array.isArray(parsed.conflicts) && parsed.conflicts.length ? parsed.conflicts : undefined,
+      };
+    }
+    return { profiles: [] };
+  } catch {
+    return { profiles: [] };
+  }
+}
+
+/** Сериализует профили и конфликты в JSON для сохранения в stream_profiles */
+function serializeStreamProfiles(profiles: StreamProfile[], conflicts?: any[]): string {
+  if (conflicts && conflicts.length) {
+    return JSON.stringify({ profiles, conflicts });
+  }
+  return JSON.stringify({ profiles });
+}
+
+/** Определяет sourceLabel по приоритету: onvif > rtsp > template > manual */
+function resolveSourceLabel(result: any, cam: any): "onvif" | "rtsp" | "template" | "manual" {
+  if (result.sourceLabel === "onvif") return "onvif";
+  if (result.sourceLabel === "rtsp") return "rtsp";
+  if (result.sourceLabel === "template") return "template";
+  return cam.probe_source || "manual";
+}
+
+/** Обновляет in-memory кэш камеры после изменений паспорта/профилей */
+function updateCameraCache(id: number, data: Record<string, any>) {
+  const updated = cameras.find((c) => c.id === id);
+  if (updated) {
+    Object.assign(updated, data);
+  }
+}
+
 app.get(["/api/cameras/:id/passport", "/api/cameras/:id/passport/"], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const cam = cameras.find((c) => c.id === id);
     if (!cam) return res.status(404).json({ detail: "Camera not found" });
 
-    const profiles = cam.stream_profiles ? JSON.parse(cam.stream_profiles) : [];
-    res.json({
+    const { profiles, conflicts } = parseStreamProfiles(cam);
+
+    const response: any = {
       vendor: cam.vendor,
-      model: cam.model_name,
+      model_name: cam.model_name,
       firmware: cam.firmware,
       serial_number: cam.serial_number,
       mac_address: cam.mac_address,
+      onvif_supported: cam.onvif_supported,
       onvif: cam.onvif_supported,
+      probe_source: cam.probe_source,
       source: cam.probe_source,
+      probe_updated_at: cam.probe_updated_at,
       updated_at: cam.probe_updated_at,
       profiles,
-    });
+      ai_stream_profile_id: cam.ai_stream_profile_id,
+      data_confidence: cam.data_confidence,
+      last_verified_at: cam.last_verified_at,
+    };
+
+    if (conflicts && conflicts.length) {
+      response.conflicts = conflicts;
+    }
+
+    res.json(response);
   } catch (e: any) {
     logError(e as Error, { path: "/api/cameras/:id/passport", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post(["/api/cameras/:id/passport/refresh", "/api/cameras/:id/passport/refresh/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    const { ip, port, username, password, model } = req.body || {};
+    const targetIp = ip || cam.ip_address || new URL(cam.source).hostname;
+    const targetPort = port || cam.ip_port || 554;
+
+    const result = await inspectCamera(
+      String(targetIp),
+      parseInt(String(targetPort), 10),
+      username ? String(username) : cam.username || undefined,
+      password ? String(password) : cam.password || undefined,
+    );
+
+    const sourceLabel = resolveSourceLabel(result, cam);
+
+    const profiles = normalizeProbeProfiles(result);
+
+    const onvifProfiles = result.onvif_profiles || [];
+    const rtspProfiles = result.rtsp_profiles || [];
+    let conflicts: any[] = [];
+    if (onvifProfiles.length && rtspProfiles.length) {
+      conflicts = compareProbeResults({ profiles: onvifProfiles } as Partial<CameraProbeResult>, { profiles: rtspProfiles } as Partial<CameraProbeResult>);
+    }
+
+    const aiStreamProfileId = profiles.length ? recommendAiStreamProfile(profiles) : null;
+
+    const dataConfidence = result.data_confidence || cam.data_confidence;
+
+    const streamProfilesJson = serializeStreamProfiles(profiles, conflicts.length ? conflicts : undefined);
+
+    await prisma.camera.update({
+      where: { id },
+      data: {
+        vendor: result.vendor || cam.vendor,
+        model_name: result.model || cam.model_name,
+        firmware: result.firmware || cam.firmware,
+        serial_number: result.serial_number || cam.serial_number,
+        mac_address: result.mac_address || cam.mac_address,
+        onvif_supported: result.onvif ?? cam.onvif_supported,
+        probe_source: sourceLabel,
+        probe_updated_at: new Date(),
+        data_confidence: dataConfidence,
+        last_verified_at: new Date(),
+        stream_profiles: streamProfilesJson,
+        ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
+      },
+    });
+
+    updateCameraCache(id, {
+      vendor: result.vendor || cam.vendor,
+      model_name: result.model || cam.model_name,
+      firmware: result.firmware || cam.firmware,
+      serial_number: result.serial_number || cam.serial_number,
+      mac_address: result.mac_address || cam.mac_address,
+      onvif_supported: result.onvif ?? cam.onvif_supported,
+      probe_source: sourceLabel,
+      data_confidence: dataConfidence,
+      last_verified_at: new Date().toISOString(),
+      stream_profiles: streamProfilesJson,
+      ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
+    });
+
+    const response: any = {
+      success: true,
+      vendor: result.vendor || cam.vendor,
+      model_name: result.model || cam.model_name,
+      model: result.model || cam.model_name,
+      firmware: result.firmware || cam.firmware,
+      serial_number: result.serial_number || cam.serial_number,
+      mac_address: result.mac_address || cam.mac_address,
+      onvif_supported: result.onvif ?? cam.onvif_supported,
+      onvif: result.onvif ?? cam.onvif_supported,
+      probe_source: sourceLabel,
+      source: sourceLabel,
+      probe_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      profiles,
+      data_confidence: dataConfidence,
+      last_verified_at: new Date().toISOString(),
+      ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
+      main: result.main,
+      sub: result.sub,
+      errors: result.errors,
+    };
+
+    if (conflicts.length) {
+      response.conflicts = conflicts;
+    }
+
+    res.json(response);
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/:id/passport/refresh", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.get(["/api/cameras/:id/passport/compare", "/api/cameras/:id/passport/compare/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    const ip = (req.query.ip as string | undefined)?.trim() || cam.ip_address || new URL(cam.source).hostname;
+    const port = parseInt((req.query.port as string | undefined) || (cam.ip_port || 554).toString(), 10) || 554;
+    const username = (req.query.username as string | undefined)?.trim() || cam.username || undefined;
+    const password = (req.query.password as string | undefined)?.trim() || cam.password || undefined;
+
+    const result = await inspectCamera(
+      String(ip),
+      parseInt(String(port), 10),
+      username,
+      password,
+    );
+
+    const currentProfiles = normalizeProbeProfiles(result);
+    const { profiles: storedProfiles, conflicts: storedConflicts } = parseStreamProfiles(cam);
+
+    const onvifProfiles = result.onvif_profiles || [];
+    const rtspProfiles = result.rtsp_profiles || [];
+    let liveConflicts: any[] = [];
+    if (onvifProfiles.length && rtspProfiles.length) {
+      liveConflicts = compareProbeResults({ profiles: onvifProfiles } as Partial<CameraProbeResult>, { profiles: rtspProfiles } as Partial<CameraProbeResult>);
+    }
+
+    const changes: any[] = [];
+    const maxCompare = Math.max(currentProfiles.length, storedProfiles.length);
+    for (let i = 0; i < maxCompare; i++) {
+      const current = currentProfiles[i];
+      const stored = storedProfiles[i];
+      if (!stored && current) {
+        changes.push({ index: i, type: "added", profile: current });
+      } else if (stored && !current) {
+        changes.push({ index: i, type: "removed", profile: stored });
+      } else if (stored && current) {
+        const diffs: string[] = [];
+        if (stored.codec !== current.codec) diffs.push(`codec: stored=${stored.codec} vs current=${current.codec}`);
+        const storedRes = stored.resolutions?.[0];
+        const currentRes = current.resolutions?.[0];
+        if (storedRes && currentRes) {
+          if (storedRes.width !== currentRes.width) diffs.push(`width: stored=${storedRes.width} vs current=${currentRes.width}`);
+          if (storedRes.height !== currentRes.height) diffs.push(`height: stored=${storedRes.height} vs current=${currentRes.height}`);
+        }
+        const storedFps = stored.fps?.current;
+        const currentFps = current.fps?.current;
+        if (storedFps !== currentFps) diffs.push(`fps: stored=${storedFps} vs current=${currentFps}`);
+        if (stored.bitrate !== current.bitrate) diffs.push(`bitrate: stored=${stored.bitrate} vs current=${current.bitrate}`);
+        if (diffs.length) changes.push({ index: i, type: "changed", name: current.name, differences: diffs });
+      }
+    }
+
+    if (changes.length && liveConflicts.length) {
+      await prisma.camera.update({
+        where: { id },
+        data: {
+          probe_updated_at: new Date(),
+          stream_profiles: serializeStreamProfiles(currentProfiles, liveConflicts),
+        },
+      });
+      updateCameraCache(id, {
+        probe_updated_at: new Date().toISOString(),
+        stream_profiles: serializeStreamProfiles(currentProfiles, liveConflicts),
+      });
+    }
+
+    const hasConfigChanged = changes.length > 0;
+
+    res.json({
+      camera_id: id,
+      stored_profiles: storedProfiles,
+      current_profiles: currentProfiles,
+      changes,
+      configuration_changed: hasConfigChanged,
+      conflicts: liveConflicts.length ? liveConflicts : (storedConflicts || []),
+      onvif_supported: result.onvif ?? cam.onvif_supported,
+      source_label: result.sourceLabel,
+      data_confidence: result.data_confidence,
+      last_verified_at: result.last_verified_at,
+      errors: result.errors,
+    });
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/:id/passport/compare", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.get(["/api/cameras/:id/ai-stream", "/api/cameras/:id/ai-stream/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    const { profiles } = parseStreamProfiles(cam);
+
+    if (!profiles.length) {
+      return res.json({
+        camera_id: id,
+        ai_stream_profile_id: cam.ai_stream_profile_id || null,
+        recommendation: null,
+        available_profiles: [],
+        reason: "no_profiles",
+      });
+    }
+
+    const recommendation = recommendAiStreamProfile(profiles);
+    let reason = "selected_by_algorithm";
+
+    const selectedProfile = profiles.find((p) => p.id === cam.ai_stream_profile_id);
+    if (!selectedProfile && recommendation) {
+      reason = "auto_recommended_not_set";
+    } else if (selectedProfile) {
+      const mainProfile = profiles.find((p) => p.type === "main");
+      const mainRes = mainProfile?.resolutions?.[0];
+      if (mainRes && mainRes.width >= 3840 && selectedProfile.type === "sub") {
+        reason = "sub_stream_selected_for_4k_main";
+      } else if (selectedProfile.codec?.toUpperCase() === "H.264") {
+        reason = "h264_preferred";
+      } else {
+        reason = "manually_selected";
+      }
+    }
+
+    res.json({
+      camera_id: id,
+      ai_stream_profile_id: cam.ai_stream_profile_id || recommendation,
+      recommendation,
+      current_selection: cam.ai_stream_profile_id || null,
+      available_profiles: profiles,
+      reason,
+    });
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/:id/ai-stream", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.put(["/api/cameras/:id/ai-stream", "/api/cameras/:id/ai-stream/"], async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+
+    const { profile_id } = req.body || {};
+
+    if (profile_id === null || profile_id === undefined) {
+      await prisma.camera.update({
+        where: { id },
+        data: { ai_stream_profile_id: null },
+      });
+      updateCameraCache(id, { ai_stream_profile_id: null });
+      return res.json({ success: true, ai_stream_profile_id: null });
+    }
+
+    if (typeof profile_id !== "string") {
+      return res.status(400).json({ detail: "profile_id must be a string or null" });
+    }
+
+    const { profiles } = parseStreamProfiles(cam);
+    const exists = profiles.find((p) => p.id === profile_id);
+    if (!exists) {
+      return res.status(400).json({ detail: `profile_id '${profile_id}' not found in camera profiles` });
+    }
+
+    await prisma.camera.update({
+      where: { id },
+      data: { ai_stream_profile_id: profile_id },
+    });
+    updateCameraCache(id, { ai_stream_profile_id: profile_id });
+
+    res.json({
+      success: true,
+      ai_stream_profile_id: profile_id,
+      profile: exists,
+    });
+  } catch (e: any) {
+    logError(e as Error, { path: "/api/cameras/:id/ai-stream", method: "PUT" });
     res.status(500).json({ detail: "Internal server error" });
   }
 });
@@ -1313,8 +1684,9 @@ app.post(["/api/categories", "/api/categories/"], async (req, res) => {
         detect_enabled: req.body.detect_enabled !== false,
         sort_order: req.body.sort_order || 100,
         is_system: false,
-        card_template_json: req.body.card_template_json ?? null,
-      });
+         card_template_json: req.body.card_template_json ?? null,
+       },
+     });
     res.status(201).json(newCat);
   } catch (err) {
     logError(err as Error, { path: "/api/categories", method: "POST" });
@@ -3289,8 +3661,22 @@ function getFfprobePath(): string {
   return "ffprobe";
 }
 
+function storedToRawProfile(p: any): any {
+  const res = p.resolutions?.[0];
+  return {
+    name: p.name,
+    codec: p.codec,
+    width: res?.width || p.width,
+    height: res?.height || p.height,
+    fps: p.fps?.current || p.fps,
+    bitrate: p.bitrate,
+    gop: p.gop,
+    source: p.source,
+  };
+}
+
 /** Real camera connectivity probe using ffprobe (RTSP/HTTP) or device check (USB). */
-async function probeCamera(cam: any): Promise<{ connected: boolean; details: string }> {
+async function probeCamera(cam: any): Promise<{ connected: boolean; details: string; conflicts?: any[]; configChanged?: boolean; profileMismatch?: boolean }> {
   try {
     if (cam.camera_type === "USB" || /^\d+$/.test((cam.source || "").trim())) {
       if (process.platform === "win32") {
@@ -3327,7 +3713,91 @@ async function probeCamera(cam: any): Promise<{ connected: boolean; details: str
     const cmd = `"${probePath}" -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout 15000000 -i "${source}"`;
     const { stdout } = await execAsync(cmd, { timeout: 10000 });
     const hasStream = stdout.trim().length > 0;
-    return { connected: hasStream, details: hasStream ? `Stream probed: ${stdout.trim()}` : "No video stream found" };
+
+    let conflicts: any[] = [];
+    let configChanged = false;
+    let profileMismatch = false;
+
+    const { profiles: storedProfiles } = parseStreamProfiles(cam);
+
+    let rtspCodec: string | undefined;
+    if (hasStream) {
+      rtspCodec = stdout.trim().split(",")[0]?.trim();
+    }
+
+    let onvifInfo: { reachable: boolean; profiles: any[]; mac?: string } = { reachable: false, profiles: [] };
+    if (cam.onvif_supported && (cam.ip_address || cam.ip_port)) {
+      try {
+        const ip = cam.ip_address || new URL(source).hostname;
+        const port = cam.ip_port || 80;
+        const { Cam } = require("onvif");
+        const camInstance = new Cam({ hostname: ip, username: cam.username, password: cam.password, port });
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            camInstance.once("connected", () => {
+              camInstance.getDeviceInformation((_err: any, info: any) => {
+                if (info?.MACAddress) onvifInfo.mac = info.MACAddress;
+              });
+              camInstance.getProfiles((_err: any, data: any) => {
+                if (Array.isArray(data)) {
+                  onvifInfo.profiles = data.map((p: any) => {
+                    const cfg = p?.VideoEncoderConfiguration || {};
+                    const width = cfg?.Resolution?.["Width"] || cfg?.width;
+                    const height = cfg?.Resolution?.["Height"] || cfg?.height;
+                    return {
+                      name: p?.Name,
+                      codec: cfg?.Encoding,
+                      width: typeof width === "number" ? width : Number(width),
+                      height: typeof height === "number" ? height : Number(height),
+                      fps: cfg?.FrameRateLimit || cfg?.fps,
+                      bitrate: cfg?.Bitrate || cfg?.bitrate,
+                      gop: cfg?.GovLength || cfg?.gop,
+                      source: "onvif",
+                    };
+                  }).filter((p: any) => p.width && p.height);
+                }
+                onvifInfo.reachable = true;
+                resolve();
+              });
+            });
+            camInstance.once("error", () => resolve());
+            camInstance.connect();
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ]);
+      } catch {
+        // ONVIF not available or not reachable — continue without it
+      }
+    }
+
+    if (storedProfiles.length > 0) {
+      if (rtspCodec && storedProfiles[0]?.codec) {
+        profileMismatch = rtspCodec.toLowerCase() !== storedProfiles[0].codec?.toLowerCase();
+      }
+      if (onvifInfo.profiles.length && storedProfiles.length) {
+        const storedRaw = storedProfiles.map(storedToRawProfile);
+        conflicts = compareProbeResults({ profiles: onvifInfo.profiles } as Partial<CameraProbeResult>, { profiles: storedRaw } as Partial<CameraProbeResult>);
+        if (conflicts.length) {
+          configChanged = true;
+        }
+      }
+    }
+
+    let details = hasStream ? `Stream probed: ${stdout.trim()}` : "No video stream found";
+    if (onvifInfo.reachable) {
+      details += ` | ONVIF: reachable, profiles=${onvifInfo.profiles?.length || 0}`;
+    }
+    if (profileMismatch) {
+      details += ` | WARN: codec mismatch (rtsp=${rtspCodec} vs stored=${storedProfiles[0]?.codec})`;
+    }
+
+    return {
+      connected: hasStream,
+      details,
+      conflicts: conflicts.length ? conflicts : undefined,
+      configChanged,
+      profileMismatch,
+    };
   } catch (error: any) {
     const msg = error.message || error.stderr || "probe failed";
     return { connected: false, details: msg.split("\n")[0].trim() };
@@ -4702,9 +5172,56 @@ app.get("/api/cameras/:id/status-check", async (req, res) => {
     const cam = cameras.find(c => c.id === id);
     if (!cam) return res.status(404).json({ detail: "Camera not found" });
     const result = await probeCamera(cam);
-    const reason = result.connected ? "online" : "error:rtsp_timeout";
-    await prisma.camera.update({ where: { id }, data: { status: reason } }).catch(() => {});
-    res.json({ camera_id: id, status: reason, details: result.details });
+    const { profiles: storedProfiles } = parseStreamProfiles(cam);
+
+    let reason = result.connected ? "online" : "error:rtsp_timeout";
+    let flags: string[] = [];
+
+    if (result.configChanged) {
+      flags.push("configuration_changed");
+      reason = "online:configuration_changed";
+    }
+    if (result.profileMismatch) {
+      flags.push("profile_mismatch");
+    }
+    if (result.conflicts && result.conflicts.length) {
+      flags.push("conflicts_detected");
+    }
+
+    if (flags.length) {
+      try {
+        await prisma.camera.update({
+          where: { id },
+          data: {
+            status: reason,
+            stream_profiles: result.conflicts
+              ? serializeStreamProfiles(storedProfiles, result.conflicts)
+              : undefined,
+          },
+        });
+        updateCameraCache(id, {
+          status: reason,
+          stream_profiles: result.conflicts
+            ? serializeStreamProfiles(storedProfiles, result.conflicts)
+            : undefined,
+        });
+      } catch (dbErr) {
+        logError(dbErr as Error, { context: "status-check cache update", camId: id });
+      }
+    } else {
+      await prisma.camera.update({ where: { id }, data: { status: reason } }).catch(() => {});
+      updateCameraCache(id, { status: reason });
+    }
+
+    res.json({
+      camera_id: id,
+      status: reason,
+      details: result.details,
+      flags,
+      configuration_changed: result.configChanged,
+      profile_mismatch: result.profileMismatch,
+      conflicts: result.conflicts,
+    });
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id/status-check", method: "GET" });
     res.status(500).json({ detail: "Internal server error" });

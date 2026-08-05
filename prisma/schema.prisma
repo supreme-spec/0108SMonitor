@@ -26,107 +26,104 @@ model Camera {
   ip_port              Int?
   username             String?
   password             String?
-   use_camera_analytics Boolean   @default(false)
-   enabled_modules      String      @default("face")
-   motion_threshold     Float?      @default(0.62)
-   motion_zones         String?
-   lpr_enabled          Boolean     @default(false)
-   lpr_regions          String?
-   exclusion_zones      String?
-   webhookSecret        String?   @unique // UNV LAPI webhook authentication secret
-   
-   // Camera passport / inspector
-   vendor               String?
-   model_name           String?
-   firmware             String?
-   serial_number        String?
-   mac_address          String?
-   onvif_supported      Boolean   @default(false)
-   probe_source         String?   // onvif | rtsp | template | manual
-   probe_updated_at     DateTime?
-   stream_profiles      String?   // JSON: [{name, codec, width, height, fps, bitrate, gop, source}]
-   
-   events               Event[]
+  use_camera_analytics Boolean     @default(false)
+  enabled_modules      String      @default("face")
+  motion_threshold     Float?      @default(0.62)
+  motion_zones         String?
+  lpr_enabled          Boolean     @default(false)
+  lpr_regions          String?
+  exclusion_zones      String?
+  webhookSecret        String?     @unique
+  vendor               String?
+  model_name           String?
+  firmware             String?
+  serial_number        String?
+  mac_address          String?
+  onvif_supported      Boolean     @default(false)
+  probe_source         String?
+  probe_updated_at     DateTime?
+  stream_profiles      String?
+  data_confidence      String?
+  last_verified_at     DateTime?
+  ai_stream_profile_id String?
+  events               Event[]
   recordings           Recording[]
 }
 
 model Category {
-  id                  Int     @id @default(autoincrement())
-  code                String  @unique
-  label               String
-  color               String
-  bg_color            String
-  is_alert            Boolean @default(false)
-  alert_sound         String  @default("off")
-  alert_volume        Float   @default(0.5)
-  detect_enabled      Boolean @default(true)
-  sort_order          Int     @default(100)
-  is_system           Boolean @default(false)
-  card_template_json  String?
+  id                 Int     @id @default(autoincrement())
+  code               String  @unique
+  label              String
+  color              String
+  bg_color           String
+  is_alert           Boolean @default(false)
+  alert_sound        String  @default("off")
+  alert_volume       Float   @default(0.5)
+  detect_enabled     Boolean @default(true)
+  sort_order         Int     @default(100)
+  is_system          Boolean @default(false)
+  card_template_json String?
 }
 
 model Guest {
-  id            Int      @id @default(autoincrement())
-  name          String   @default("Неизвестный")
-  photo_path    String?
-  is_active     Boolean  @default(true)
-  created_at    DateTime @default(now())
-  last_seen_at  DateTime?
-  visit_count   Int      @default(0)
-  confidence    Float?
-  camera_id     Int?
-  camera_name   String?
+  id           Int       @id @default(autoincrement())
+  name         String    @default("Неизвестный")
+  photo_path   String?
+  is_active    Boolean   @default(true)
+  created_at   DateTime  @default(now())
+  last_seen_at DateTime?
+  visit_count  Int       @default(0)
+  confidence   Float?
+  camera_id    Int?
+  camera_name  String?
 }
 
 model Person {
-  id              Int                @id @default(autoincrement())
-  name            String
-  category        String
-  position        String?
-  comment         String?
-  phone           String?
-  email           String?
-  birth_date      String?
-  address         String?
-  organization    String?
-  extra_info      String?
-  photo_path      String?
-  is_active       Boolean            @default(true)
-  created_at      DateTime           @default(now())
-  last_seen_at    DateTime?
-  visit_count     Int                @default(0)
-  embedding_count Int                @default(0)
-  loyalty_index   Float              @default(0.0)
-  total_visits    Int                @default(0)
-  vip_level       String?
+  id                 Int                @id @default(autoincrement())
+  name               String
+  category           String
+  position           String?
+  comment            String?
+  phone              String?
+  email              String?
+  birth_date         String?
+  address            String?
+  organization       String?
+  extra_info         String?
+  photo_path         String?
+  is_active          Boolean            @default(true)
+  created_at         DateTime           @default(now())
+  last_seen_at       DateTime?
+  visit_count        Int                @default(0)
+  embedding_count    Int                @default(0)
+  loyalty_index      Float              @default(0.0)
+  total_visits       Int                @default(0)
+  vip_level          String?
   custom_fields_json String?
-  episode_persons EpisodePerson[]
-
-  // Импорт персонала
-  import_review   Boolean            @default(false)
-  import_reason   String?
-  import_raw_name String?
-
-  photos          PersonPhoto[]
-  confirmations   FaceConfirmation[]
-  events          Event[]
-  descriptors     FaceDescriptor[]
-  incidents       Incident[]
-  policies        PersonPolicy[]
-  tags            Tag[]
-  visits          PersonVisit[]
+  import_review      Boolean            @default(false)
+  import_reason      String?
+  import_raw_name    String?
+  episode_persons    EpisodePerson[]
+  events             Event[]
+  descriptors        FaceDescriptor[]
+  incidents          Incident[]
+  policies           PersonPolicy[]
+  tags               Tag[]
+  confirmations      FaceConfirmation[]
+  photos             PersonPhoto[]
+  visits             PersonVisit[]
 }
 
 model PersonVisit {
-  id           Int      @id @default(autoincrement())
-  person_id    Int
-  camera_id    Int?
-  camera_name  String?
-  confidence   Float?
-  visit_date   DateTime @default(now())
-  source       String   @default("recognition")
-  created_at   DateTime @default(now())
-  person       Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
+  id          Int      @id @default(autoincrement())
+  person_id   Int
+  camera_id   Int?
+  camera_name String?
+  confidence  Float?
+  visit_date  DateTime @default(now())
+  source      String   @default("recognition")
+  created_at  DateTime @default(now())
+  person      Person   @relation(fields: [person_id], references: [id], onDelete: Cascade)
 
   @@index([person_id])
   @@index([person_id, visit_date])

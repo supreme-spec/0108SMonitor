@@ -94,7 +94,10 @@ export interface Camera {
   onvif_supported?: boolean
   probe_source?: string | null
   probe_updated_at?: string | null
-  stream_profiles?: string | null
+  data_confidence?: string | null
+  last_verified_at?: string | null
+   stream_profiles?: string | null
+   ai_stream_profile_id?: string | null
 }
 
 export interface KrakenEvent {

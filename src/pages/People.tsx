@@ -5,7 +5,7 @@ import { Plus, Search, Edit2, Trash2, Upload, X, Camera, RefreshCw, ImagePlus, S
 import type { Person, Category, Camera as CameraType } from '../types'
 import { apiFetch, apiUpload, wsUrl, PHOTO_BASE } from '../api/client'
 import CategoryBadge from '../components/CategoryBadge'
-import { useCategories } from '../hooks/useCategories'
+import { useCategories, fetchCategories, getCategoryByCode } from '../hooks/useCategories'
 import ConfirmModal, { AlertModal } from '../components/ConfirmModal'
 
 function fmtDate(iso: string | null | undefined) {
@@ -669,6 +669,10 @@ function PersonProfile({ person, onClose, onEdit }: {
   const [showAllPhotos, setShowAllPhotos] = useState(false)
   const [reindexing, setReindexing] = useState(false)
   const [reindexResult, setReindexResult] = useState<{ ok: boolean; registered: number; failed: number; errors: string[] } | null>(null)
+  const [categoryTemplate, setCategoryTemplate] = useState<any>(null)
+  const [customFields, setCustomFields] = useState<Record<string, any>>({})
+  const [editingCustomField, setEditingCustomField] = useState<string | null>(null)
+  const [customFieldValue, setCustomFieldValue] = useState('')
 
   const load = useCallback(() => {
     apiFetch<Person>(`/persons/${person.id}`).then(setFull).catch(() => setFull(person))
@@ -676,8 +680,19 @@ function PersonProfile({ person, onClose, onEdit }: {
       .then(r => { setLoyalty(r.loyalty); setIncidents(r.incidents||[]); setTags(r.tags||[]); setIncidentTypes(r.incident_types||{}); setTagTypes(r.tag_types||{}) })
       .catch(() => {})
     apiFetch<any>(`/loyalty/${person.id}/visits`)
-      .then(r => setVisits(r.months || []))
+      .then(r => setVisits(r.visits || r.months || []))
       .catch(() => {})
+    // Fetch category template for custom fields rendering
+    fetchCategories().then(cats => {
+      const cat = getCategoryByCode(person.category, cats)
+      if (cat?.card_template_json) {
+        try { setCategoryTemplate(JSON.parse(cat.card_template_json)) } catch {}
+      }
+    }).catch(() => {})
+    // Parse custom fields from person
+    if (person?.custom_fields_json) {
+      try { setCustomFields(JSON.parse(person.custom_fields_json)) } catch {}
+    }
   }, [person.id])
 
   useEffect(() => { load() }, [load])
@@ -843,6 +858,66 @@ function PersonProfile({ person, onClose, onEdit }: {
           )}
         </div>
 
+        {/* ── Шаблонные поля карточки (custom fields) ── */}
+        {categoryTemplate?.fields && categoryTemplate.fields.length > 0 && (
+          <div className="border-b border-kraken-border">
+            <div className="px-4 py-3">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className="text-kraken-disabled text-[10px] uppercase tracking-widest">Настройки персоны</span>
+              </div>
+              {categoryTemplate.fields
+                .filter((f: any) => !f.readonly)
+                .map((f: any) => {
+                  const val = customFields[f.key] ?? ''
+                  const isEditing = editingCustomField === f.key
+                  return (
+                    <div key={f.key} className="mb-2 last:mb-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-kraken-muted text-[11px] w-36 flex-shrink-0">{f.label}:</span>
+                        {isEditing ? (
+                          <div className="flex items-center gap-1 flex-1">
+                            {f.type === 'select' && f.options ? (
+                              <select
+                                value={customFieldValue}
+                                onChange={e => setCustomFieldValue(e.target.value)}
+                                className="flex-1 bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1 rounded-lg focus:outline-none focus:border-kraken-purple">
+                                {f.options.map((opt: string) => <option key={opt} value={opt}>{opt || '—'}</option>)}
+                              </select>
+                            ) : (
+                              <input
+                                value={customFieldValue}
+                                onChange={e => setCustomFieldValue(e.target.value)}
+                                className="flex-1 bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1 rounded-lg focus:outline-none focus:border-kraken-purple"
+                              />
+                            )}
+                            <button onClick={async () => {
+                              customFields[f.key] = customFieldValue
+                              setCustomFields({ ...customFields })
+                              try {
+                                await apiFetch(`/persons/${person.id}`, {
+                                  method: 'PUT',
+                                  body: JSON.stringify({ custom_fields_json: JSON.stringify(customFields) }),
+                                })
+                              } catch {}
+                              setEditingCustomField(null)
+                            }} className="text-kraken-green hover:text-kraken-green/70 text-xs px-1">✓</button>
+                            <button onClick={() => { setEditingCustomField(null); setCustomFieldValue(val) }} className="text-kraken-muted hover:text-kraken-text text-xs px-1">✕</button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between flex-1">
+                            <span className="text-kraken-text text-xs">{val || <span className="text-kraken-disabled">не указано</span>}</span>
+                            <button onClick={() => { setEditingCustomField(f.key); setCustomFieldValue(val) }}
+                              className="text-kraken-muted hover:text-kraken-purple text-xs">✏️</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+            </div>
+          </div>
+        )}
+
         <div className="px-4 py-3 border-b border-kraken-border">
           <div className="flex items-center gap-1.5 mb-2">
             <ThumbsUp size={11} className="text-kraken-green" />
@@ -922,7 +997,7 @@ function PersonProfile({ person, onClose, onEdit }: {
               <span className="text-kraken-disabled text-[10px] uppercase tracking-widest">История визитов</span>
               {visits.length > 0 && (
                 <span className="bg-kraken-hover text-kraken-muted text-[10px] px-1.5 py-0.5 rounded-full">
-                  {visits.reduce((s: number, m: any) => s + m.count, 0)} всего
+                  {visits.length} всего
                 </span>
               )}
             </div>
@@ -930,54 +1005,35 @@ function PersonProfile({ person, onClose, onEdit }: {
           </button>
 
           {showVisits && (
-            <div className="mt-3 flex flex-col gap-3">
+            <div className="mt-3 flex flex-col gap-2">
               {visits.length === 0 && (
                 <div className="text-kraken-disabled text-xs text-center py-2">Визитов не зафиксировано</div>
               )}
-              {visits.map((month: any) => (
-                <div key={month.month}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-kraken-text text-xs font-semibold">{month.label}</span>
-                    <span className="text-kraken-disabled text-[10px] bg-kraken-hover px-1.5 py-0.5 rounded-full">{month.count} визит{month.count === 1 ? '' : month.count < 5 ? 'а' : 'ов'}</span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {month.visits.slice(0, 5).map((v: any) => {
-                      const pct = v.confidence != null
-                        ? Math.round(((Math.max(0.28, Math.min(0.85, v.confidence)) - 0.28) / (0.85 - 0.28)) * 100)
-                        : null
-                      return (
-                        <div key={v.id} className="flex items-center gap-2 py-1.5 border-b border-kraken-border/30 last:border-0">
-                          {v.snapshot_path ? (
-                            <img src={`/${v.snapshot_path}`} alt="" className="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-kraken-border" />
-                          ) : (
-                            <div className="w-12 h-12 rounded-lg bg-kraken-hover flex-shrink-0 flex items-center justify-center text-lg">
-                              {v.shift === 'evening' ? '🌙' : v.shift === 'morning' ? '🌅' : '☀️'}
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <div className="text-kraken-text text-[11px] font-medium">
-                              {v.shift_label || (v.shift === 'night' ? '🌙 Ночная' : '☀️ Дневная')}
-                            </div>
-                            <div className="text-kraken-disabled text-[10px] flex items-center gap-1.5">
-                              <span>{v.time}</span>
-                              <span>·</span>
-                              <span>{v.camera_name}</span>
-                            </div>
-                          </div>
-                          {pct != null && (
-                            <span className="text-[10px] font-bold text-kraken-green flex-shrink-0">{pct}%</span>
-                          )}
-                        </div>
-                      )
-                    })}
-                    {month.visits.length > 5 && (
-                      <div className="text-kraken-disabled text-[10px] text-center py-0.5">
-                        + ещё {month.visits.length - 5} визит{month.visits.length - 5 < 5 ? 'а' : 'ов'}
+              {visits.slice(0, 50).map((v: any) => {
+                const dt = new Date(v.visit_date || v.created_at)
+                const dateStr = isNaN(dt.getTime()) ? '—' : dt.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })
+                const pct = v.confidence != null
+                  ? Math.round(((Math.max(0.28, Math.min(0.85, v.confidence)) - 0.28) / (0.85 - 0.28)) * 100)
+                  : null
+                return (
+                  <div key={v.id} className="flex items-center gap-2 py-1.5 border-b border-kraken-border/30 last:border-0">
+                    <div className="w-12 h-12 rounded-lg bg-kraken-hover flex-shrink-0 flex items-center justify-center text-lg">
+                      ☀️
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-kraken-text text-[11px] font-medium">
+                        {dateStr}
                       </div>
+                      <div className="text-kraken-disabled text-[10px] flex items-center gap-1.5">
+                        <span>{v.camera_name || '—'}</span>
+                      </div>
+                    </div>
+                    {pct != null && (
+                      <span className="text-[10px] font-bold text-kraken-green flex-shrink-0">{pct}%</span>
                     )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

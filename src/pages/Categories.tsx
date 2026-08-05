@@ -32,6 +32,7 @@ interface CategoryFormData {
   alert_volume: number
   detect_enabled: boolean
   sort_order: number
+  card_template_json?: string | null
 }
 
 const emptyForm = (): CategoryFormData => ({
@@ -67,6 +68,7 @@ export default function Categories() {
       code: cat.code, label: cat.label, color: cat.color, bg_color: cat.bg_color,
       is_alert: cat.is_alert, alert_sound: cat.alert_sound, alert_volume: cat.alert_volume,
       detect_enabled: cat.detect_enabled, sort_order: cat.sort_order,
+      card_template_json: cat.card_template_json ?? null,
     })
     setShowAdd(false)
     setMsg('')
@@ -98,11 +100,11 @@ export default function Categories() {
       if (editing) {
         await apiFetch(`/categories/${editing.code}`, {
           method: 'PUT',
-          body: JSON.stringify({
-            label: form.label, color: form.color, bg_color: form.bg_color,
-            is_alert: form.is_alert, alert_sound: form.alert_sound,
-            alert_volume: form.alert_volume, detect_enabled: form.detect_enabled,
-            sort_order: form.sort_order,
+           body: JSON.stringify({
+             label: form.label, color: form.color, bg_color: form.bg_color,
+             is_alert: form.is_alert, alert_sound: form.alert_sound,
+             alert_volume: form.alert_volume, detect_enabled: form.detect_enabled,
+             sort_order: form.sort_order, card_template_json: form.card_template_json,
           }),
         })
         setMsg('✅ Сохранено')
@@ -387,9 +389,21 @@ export default function Categories() {
                 value={form.sort_order}
                 onChange={e => setForm(f => ({ ...f, sort_order: parseInt(e.target.value) || 100 }))}
                 className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple" />
-            </div>
+             </div>
 
-            {msg && (
+             {/* Шаблон карточки (только для EDIT_GUEST) */}
+             <div>
+               <label className="text-kraken-disabled text-xs uppercase tracking-wider mb-1 block">Шаблон карточки (JSON)</label>
+               <textarea
+                 value={form.card_template_json ?? ''}
+                 onChange={e => setForm(f => ({ ...f, card_template_json: e.target.value || null }))}
+                 placeholder="Оставьте пустым для стандартного шаблона"
+                 className="w-full bg-kraken-base border border-kraken-border text-kraken-text text-[11px px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple font-mono resize-y min-h-[80px]"
+               />
+               <p className="text-kraken-disabled text-[10px] mt-1">JSON-шаблон полей карточки персоны. Используется для категорий вроде "Гость".</p>
+             </div>
+
+             {msg && (
               <div className={`text-sm px-3 py-2 rounded-lg ${msg.startsWith('✅') ? 'bg-kraken-green/10 text-kraken-green' : 'bg-kraken-red/10 text-kraken-red'}`}>
                 {msg}
               </div>

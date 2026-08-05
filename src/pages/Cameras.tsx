@@ -36,6 +36,12 @@ export default function Cameras() {
   const [streamLoading, setStreamLoading] = useState(false)
   const [streamSaving, setStreamSaving] = useState(false)
 
+  // Camera Passport 2.0 state
+  const [passportProfiles, setPassportProfiles] = useState<any[]>([])
+  const [aiStreamProfileId, setAiStreamProfileId] = useState<string | null>(null)
+  const [refreshSteps, setRefreshSteps] = useState<Array<{ label: string; status: 'pending' | 'active' | 'done' | 'error'; detail?: string }>>([])
+  const [refreshRunning, setRefreshRunning] = useState(false)
+
   const [confirmState, setConfirmState] = useState<{
     isOpen: boolean;
     title: string;
@@ -56,6 +62,144 @@ export default function Cameras() {
     } catch {}
     finally { setLoading(false) }
   }, [])
+
+  function parsePassportProfiles(cam: Camera | null): any[] {
+    if (!cam?.stream_profiles) return []
+    try {
+      const parsed = JSON.parse(cam.stream_profiles)
+      if (Array.isArray(parsed)) return parsed
+      if (parsed && Array.isArray(parsed.profiles)) return parsed.profiles
+      return []
+    } catch {
+      return []
+    }
+  }
+
+  function getConfidenceColor(conf?: string | null): string {
+    switch (conf) {
+      case 'real': return 'text-kraken-green'
+      case 'probed': return 'text-kraken-blue'
+      case 'template': return 'text-kraken-orange'
+      case 'manual': return 'text-kraken-gray'
+      case 'conflict': return 'text-red-400'
+      default: return 'text-kraken-muted'
+    }
+  }
+
+  function getSourceLabelColor(source?: string | null): string {
+    switch (source) {
+      case 'onvif': return 'bg-kraken-green/20 text-kraken-green'
+      case 'rtsp': return 'bg-kraken-blue/20 text-kraken-blue'
+      case 'template': return 'bg-kraken-orange/20 text-kraken-orange'
+      case 'manual': return 'bg-kraken-gray/20 text-kraken-gray'
+      default: return 'bg-kraken-muted/20 text-kraken-muted'
+    }
+  }
+
+  function getSourceLabelText(source?: string | null): string {
+    switch (source) {
+      case 'onvif': return 'ONVIF'
+      case 'rtsp': return 'RTSP'
+      case 'template': return 'TEMPLATE'
+      case 'manual': return 'MANUAL'
+      default: return 'UNKNOWN'
+    }
+  }
+
+  function getCodecColor(codec?: string): string {
+    const c = (codec || '').toUpperCase()
+    if (c.includes('H265') || c.includes('HEVC')) return 'text-kraken-purple'
+    if (c.includes('H264') || c.includes('AVC')) return 'text-kraken-blue'
+    if (c.includes('MPEG4')) return 'text-kraken-green'
+    return 'text-kraken-text'
+  }
+
+  async function handleRefreshPassport() {
+    if (!detailCamera || refreshRunning) return
+    setRefreshRunning(true)
+    const steps = [
+      { label: 'Ping', status: 'pending' as const },
+      { label: 'TCP :554', status: 'pending' as const },
+      { label: 'ONVIF', status: 'pending' as const },
+      { label: 'GetProfiles', status: 'pending' as const },
+      { label: 'RTSP probe', status: 'pending' as const },
+      { label: 'FFprobe', status: 'pending' as const },
+      { label: 'Сравнение', status: 'pending' as const },
+      { label: 'Валидация AI stream', status: 'pending' as const },
+    ]
+    setRefreshSteps(steps)
+
+    try {
+      setRefreshSteps(prev => prev.map((s, i) => i === 0 ? { ...s, status: 'active' } : s))
+      await new Promise(r => setTimeout(r, 400))
+
+      setRefreshSteps(prev => prev.map((s, i) => i === 0 ? { ...s, status: 'done' } : i === 1 ? { ...s, status: 'active' } : s))
+      await new Promise(r => setTimeout(r, 400))
+
+      setRefreshSteps(prev => prev.map((s, i) => i <= 1 ? { ...s, status: 'done' } : i === 2 ? { ...s, status: 'active' } : s))
+      const data = await apiFetch<any>(`/cameras/${detailCamera.id}/passport/refresh`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+
+      setRefreshSteps(prev => prev.map((s, i) => i <= 2 ? { ...s, status: 'done' } : i === 3 ? { ...s, status: 'done', detail: `${data.profiles?.length || 0} profiles` } : i === 4 ? { ...s, status: 'active' } : s))
+      await new Promise(r => setTimeout(r, 300))
+
+      setRefreshSteps(prev => prev.map((s, i) => i <= 4 ? { ...s, status: 'done' } : i === 5 ? { ...s, status: 'done' } : i === 6 ? { ...s, status: 'active' } : s))
+      await new Promise(r => setTimeout(r, 200))
+
+      const hasConflicts = data.conflicts && data.conflicts.length > 0
+      setRefreshSteps(prev => prev.map((s, i) => i <= 5 ? { ...s, status: 'done' } : i === 6 ? { ...s, status: hasConflicts ? 'error' : 'done', detail: hasConflicts ? `${data.conflicts.length} conflicts` : 'OK' } : i === 7 ? { ...s, status: 'active' } : s))
+
+      if (data.profiles?.length) {
+        setPassportProfiles(data.profiles)
+      }
+      if (data.ai_stream_profile_id) {
+        setAiStreamProfileId(data.ai_stream_profile_id)
+      }
+
+      setRefreshSteps(prev => prev.map((s, i) => i <= 6 ? { ...s, status: 'done' } : { ...s, status: 'done', detail: data.ai_stream_profile_id ? 'AI stream validated' : 'no AI stream' }))
+
+      if (data.success) {
+        setAlertState({ isOpen: true, title: 'Готово', message: `Паспорт обновлён: ${data.vendor || ''} ${data.model || ''}` })
+        fetchCameras()
+      }
+    } catch (e: any) {
+      setRefreshSteps(prev => prev.map(s => s.status === 'active' ? { ...s, status: 'error' } : s))
+      setAlertState({ isOpen: true, title: 'Ошибка', message: 'Ошибка обновления паспорта: ' + e.message })
+    } finally {
+      setRefreshRunning(false)
+    }
+  }
+
+  async function handleSelectAiStream(profileId: string | null) {
+    if (!detailCamera) return
+    try {
+      await apiFetch(`/cameras/${detailCamera.id}/ai-stream`, {
+        method: 'PUT',
+        body: JSON.stringify({ profile_id: profileId }),
+      })
+      setAiStreamProfileId(profileId)
+      setAlertState({ isOpen: true, title: 'Готово', message: profileId ? 'AI поток выбран' : 'AI поток сброшен' })
+    } catch (e: any) {
+      setAlertState({ isOpen: true, title: 'Ошибка', message: 'Ошибка выбора AI потока: ' + e.message })
+    }
+  }
+
+  function loadPassportData(cam: Camera | null) {
+    if (!cam) {
+      setPassportProfiles([])
+      setAiStreamProfileId(null)
+      return
+    }
+    const profiles = parsePassportProfiles(cam)
+    setPassportProfiles(profiles)
+    setAiStreamProfileId(cam.ai_stream_profile_id || null)
+  }
+
+  useEffect(() => {
+    if (detailCamera) loadPassportData(detailCamera)
+  }, [detailCamera?.id, detailCamera?.stream_profiles])
 
   useEffect(() => {
     fetchCameras()
@@ -478,6 +622,169 @@ export default function Cameras() {
                     <button onClick={() => { handleStop(detailCamera.id); setDetailCamera(null) }} className="flex-1 bg-kraken-red/10 hover:bg-kraken-red/20 text-kraken-red text-sm py-2 rounded-lg transition-colors">Остановить</button>
                   )}
                   <button onClick={() => { setDetailCamera(null); setEditCamera(detailCamera) }} className="btn-ghost flex-1">Редактировать</button>
+                </div>
+
+                {/* Camera Passport 2.0 */}
+                <div className="mt-3 space-y-3">
+                  {/* Layer 1: Identity */}
+                  <div className="p-3 rounded-lg bg-kraken-hover border border-kraken-border">
+                    <div className="text-kraken-text text-xs font-semibold mb-2">🪪 Идентификация</div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {detailCamera.vendor && (
+                        <div>
+                          <span className="text-kraken-muted text-[10px]">Производитель</span>
+                          <div className="text-kraken-text">{detailCamera.vendor}</div>
+                        </div>
+                      )}
+                      {detailCamera.model_name && (
+                        <div>
+                          <span className="text-kraken-muted text-[10px]">Модель</span>
+                          <div className="text-kraken-text">{detailCamera.model_name}</div>
+                        </div>
+                      )}
+                      {detailCamera.firmware && (
+                        <div>
+                          <span className="text-kraken-muted text-[10px]">Прошивка</span>
+                          <div className="text-kraken-text font-mono">{detailCamera.firmware}</div>
+                        </div>
+                      )}
+                      {detailCamera.serial_number && (
+                        <div>
+                          <span className="text-kraken-muted text-[10px]">Серийный номер</span>
+                          <div className="text-kraken-text font-mono">{detailCamera.serial_number}</div>
+                        </div>
+                      )}
+                      {detailCamera.mac_address && (
+                        <div>
+                          <span className="text-kraken-muted text-[10px]">MAC</span>
+                          <div className="text-kraken-text font-mono">{detailCamera.mac_address}</div>
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-kraken-muted text-[10px]">ONVIF</span>
+                        <div className="text-kraken-text">{detailCamera.onvif_supported ? 'Да' : 'Нет'}</div>
+                      </div>
+                      <div>
+                        <span className="text-kraken-muted text-[10px]">Данные</span>
+                        <div className={`text-kraken-text ${getConfidenceColor(detailCamera.data_confidence)}`}>
+                          {detailCamera.data_confidence || 'unknown'}
+                        </div>
+                      </div>
+                      {detailCamera.last_verified_at && (
+                        <div className="col-span-2">
+                          <span className="text-kraken-muted text-[10px]">Последняя проверка</span>
+                          <div className="text-kraken-text font-mono">{new Date(detailCamera.last_verified_at).toLocaleString()}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Layer 2: Capabilities */}
+                  <div className="p-3 rounded-lg bg-kraken-hover border border-kraken-border">
+                    <div className="text-kraken-text text-xs font-semibold mb-2">⚙ Возможности камеры</div>
+                    {passportProfiles.length === 0 ? (
+                      <div className="text-kraken-muted text-xs">Профили не обнаружены. Нажмите «Обновить паспорт».</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(() => {
+                          const groups = passportProfiles.reduce((acc: any, p: any) => {
+                            const type = p.type || (p.name?.toLowerCase().includes('main') ? 'main' : 'sub')
+                            if (!acc[type]) acc[type] = []
+                            acc[type].push(p)
+                            return acc
+                          }, {})
+                          return Object.entries(groups).map(([type, profiles]: [string, any]) => (
+                            <div key={type}>
+                              <div className="text-kraken-muted text-[10px] uppercase tracking-wider mb-1">{type === 'main' ? 'MAIN STREAM' : 'SUB STREAM'}</div>
+                              <div className="flex flex-wrap gap-2">
+                                {(profiles as any[]).map((p: any, idx: number) => {
+                                  const res = p.resolutions?.[0] || p
+                                  const label = res.label || `${res.width}x${res.height}`
+                                  return (
+                                    <div key={idx} className="flex items-center gap-1.5 bg-kraken-base border border-kraken-border rounded-md px-2 py-1 text-xs">
+                                      <span className="text-kraken-green">✓</span>
+                                      <span className="text-kraken-text">{label}</span>
+                                      <span className={`text-[10px] ${getCodecColor(p.codec)}`}>{p.codec || 'H.264'}</span>
+                                      {p.fps?.current ? <span className="text-kraken-muted text-[10px]">{p.fps.current} FPS</span> : null}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        })()}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Layer 3: Active Configuration */}
+                  <div className="p-3 rounded-lg bg-kraken-hover border border-kraken-border">
+                    <div className="text-kraken-text text-xs font-semibold mb-2">🎯 Активная конфигурация</div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-kraken-muted text-xs">AI STREAM</span>
+                        <div className="flex items-center gap-2">
+                          {aiStreamProfileId && passportProfiles.find((p: any) => p.id === aiStreamProfileId) ? (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${getSourceLabelColor((passportProfiles.find((p: any) => p.id === aiStreamProfileId) as any)?.source)}`}>
+                              {getSourceLabelText((passportProfiles.find((p: any) => p.id === aiStreamProfileId) as any)?.source)}
+                            </span>
+                          ) : null}
+                          <select
+                            value={aiStreamProfileId || ''}
+                            onChange={e => handleSelectAiStream(e.target.value || null)}
+                            className="bg-kraken-base border border-kraken-border text-kraken-text text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-kraken-purple"
+                          >
+                            <option value="">— не выбран —</option>
+                            {passportProfiles.map((p: any) => {
+                              const res = p.resolutions?.[0] || p
+                              const isRecommended = p.id === (detailCamera as any)?.recommended_ai_profile
+                              return (
+                                <option key={p.id} value={p.id}>
+                                  {p.name || p.id} — {res.label || `${res.width}x${res.height}`} — {p.codec || 'H.264'} {isRecommended ? ' (рекомендуемый)' : ''}
+                                </option>
+                              )
+                            })}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Refresh Passport */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleRefreshPassport}
+                      disabled={refreshRunning}
+                      className="text-[10px] bg-kraken-purple/10 hover:bg-kraken-purple/20 text-kraken-purple px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {refreshRunning ? 'Обновление...' : '🔄 Обновить паспорт'}
+                    </button>
+                    {detailCamera.data_confidence && (
+                      <span className={`text-[10px] px-2 py-1 rounded-lg ${getConfidenceColor(detailCamera.data_confidence)} bg-kraken-hover`}>
+                        {detailCamera.data_confidence}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Refresh Pipeline Steps */}
+                  {refreshSteps.length > 0 && (
+                    <div className="p-2 rounded-lg bg-kraken-base border border-kraken-border space-y-1">
+                      {refreshSteps.map((step, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-[10px]">
+                          <span className="text-kraken-muted">{step.label}</span>
+                          <span className={
+                            step.status === 'done' ? 'text-kraken-green' :
+                            step.status === 'error' ? 'text-red-400' :
+                            step.status === 'active' ? 'text-kraken-blue' :
+                            'text-kraken-muted'
+                          }>
+                            {step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : step.status === 'active' ? '◌' : '○'}
+                            {step.detail ? ` ${step.detail}` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
