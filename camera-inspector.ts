@@ -146,6 +146,7 @@ function matchTemplate(modelName?: string) {
 }
 
 async function probeRtsp(source: string): Promise<Partial<CameraProbeResult>> {
+  console.log(`[PROBE] RTSP probe: ${source}`);
   const probePath = getFfprobePath();
   const args = [
     "-v", "error",
@@ -182,19 +183,21 @@ async function probeRtsp(source: string): Promise<Partial<CameraProbeResult>> {
       bitrate: info.bit_rate ? parseInt(info.bit_rate, 10) : undefined,
       source: "rtsp",
     };
-    return {
-      main: { codec: profile.codec, width, height, fps, bitrate: profile.bitrate },
-      profiles: [profile],
-      transport: "tcp",
-      sourceLabel: "rtsp",
-    };
-  } catch (e: any) {
-    return { errors: [e.message || String(e)] };
-  }
+      return {
+        main: { codec: profile.codec, width, height, fps, bitrate: profile.bitrate },
+        profiles: [profile],
+        transport: "tcp",
+        sourceLabel: "rtsp",
+      };
+    } catch (e: any) {
+      console.log(`[PROBE] RTSP probe failed: ${source} — ${e.message || String(e)}`);
+      return { errors: [e.message || String(e)] };
+    }
 }
 
 async function probeRtspChannel(sourceBase: string, pathSuffix: string, username?: string, password?: string): Promise<StreamProfile | null> {
-  const source = `${sourceBase}${pathSuffix}?tcp_transport=tcp`;
+  const source = `${sourceBase}${pathSuffix}`;
+  console.log(`[PROBE] RTSP channel probe: ${pathSuffix}`);
   const probePath = getFfprobePath();
   const args = [
     "-v", "error",
@@ -206,9 +209,16 @@ async function probeRtspChannel(sourceBase: string, pathSuffix: string, username
     "-i", source,
   ];
   try {
-    const { stdout } = await execAsync(`"${probePath}" ${args.map((a) => `"${a}"`).join(" ")}`, {
-      timeout: 8000,
-    });
+    let stdout = "";
+    try {
+      const result = await execAsync(`"${probePath}" ${args.map((a) => `"${a}"`).join(" ")}`, {
+        timeout: 8000,
+      });
+      stdout = result.stdout;
+    } catch (e: any) {
+      // ffprobe может вернуть exit code 1 при SEI warning, но stdout будет содержать данные
+      stdout = e.stdout || "";
+    }
     const info: any = {};
     for (const line of stdout.split(/\r?\n/)) {
       const [key, ...rest] = line.split("=");
@@ -234,6 +244,7 @@ async function probeRtspChannel(sourceBase: string, pathSuffix: string, username
       source: "rtsp",
     };
   } catch {
+    console.log(`[PROBE] RTSP channel probe failed: ${pathSuffix}`);
     return null;
   }
 }
@@ -257,6 +268,7 @@ function getOnvifCam() {
 }
 
 async function onvifProbe(ip: string, port = 80, username?: string, password?: string): Promise<Partial<CameraProbeResult>> {
+  console.log(`[PROBE] ONVIF probe для ${ip}:${port}`);
   const Cam = getOnvifCam();
   if (!Cam) return {};
 
@@ -333,6 +345,11 @@ async function onvifProbe(ip: string, port = 80, username?: string, password?: s
 
       if (mappedProfiles.length === 0) continue;
 
+      console.log(`[PROBE] ONVIF найден ${mappedProfiles.length} профилей для ${ip}`);
+      for (const mp of mappedProfiles) {
+        console.log(`[PROBE]   ONVIF profile: ${mp.name} (${mp.codec} ${mp.resolutions?.[0]?.width}x${mp.resolutions?.[0]?.height}@${mp.fps?.current}fps)`);
+      }
+
       const main = mappedProfiles[0];
       const sub = mappedProfiles[1] || mappedProfiles[0];
 
@@ -349,11 +366,15 @@ async function onvifProbe(ip: string, port = 80, username?: string, password?: s
         sourceLabel: "onvif",
       };
     } catch (e) {
+      console.log(`[PROBE] ONVIF probe error on ${path}: ${(e as Error).message}`);
       errors.push(`ONVIF ${path}: ${(e as Error).message}`);
       continue;
     }
   }
 
+  if (errors.length === 0) {
+    console.log(`[PROBE] ONVIF not reachable for ${ip}`);
+  }
   return { errors: errors.length ? errors : ["ONVIF not reachable"] };
 }
 
@@ -512,6 +533,7 @@ export function recommendAiStreamProfile(profiles: StreamProfile[]): string | nu
 }
 
 export async function inspectCamera(ip: string, port = 554, username?: string, password?: string): Promise<CameraProbeResult> {
+  console.log(`[PROBE] Начинаю probe камеры: ${ip}:${port}`);
   const result: CameraProbeResult = {
     reachable: false,
     errors: [],
@@ -519,11 +541,13 @@ export async function inspectCamera(ip: string, port = 554, username?: string, p
 
   const portOpen = await checkPort(ip, port, 1500);
   if (!portOpen) {
+    console.log(`[PROBE] Порт ${port} закрыт для ${ip}`);
     result.errors?.push(`Port ${port} closed`);
     result.data_confidence = "unknown";
     result.last_verified_at = new Date().toISOString();
     return result;
   }
+  console.log(`[PROBE] Камера ${ip} доступна (порт ${port} открыт)`);
   result.reachable = true;
 
   const sourceBase = `${username ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : ""}${ip}:${port}`;
@@ -538,12 +562,14 @@ export async function inspectCamera(ip: string, port = 554, username?: string, p
   ];
 
   const onvifResult = await onvifProbe(ip, 80, username, password);
+  console.log(`[PROBE] ONVIF probe для ${ip}: profiles=${(onvifResult.profiles || []).length}, vendor=${onvifResult.vendor || 'N/A'}, model=${onvifResult.model || 'N/A'}`);
   result.onvif_profiles = onvifResult.profiles || [];
 
   let rtspProfiles: StreamProfile[] = [];
   for (const path of rtspCandidates) {
     const profile = await probeRtspChannel(rtspBase, path, username, password);
     if (profile) {
+      console.log(`[PROBE] Найден RTSP поток: ${profile.name} (${profile.codec} ${profile.resolutions?.[0]?.width}x${profile.resolutions?.[0]?.height}@${profile.fps?.current}fps)`);
       rtspProfiles.push(profile);
       if (!result.source) {
         result.source = `${rtspBase}${path}`;
@@ -561,7 +587,7 @@ export async function inspectCamera(ip: string, port = 554, username?: string, p
   if (onvifResult.profiles?.length) {
     Object.assign(result, onvifResult);
     if (!result.source) {
-      result.source = `${rtspBase}/Streaming/Channels/101?tcp_transport=tcp`;
+      result.source = `${rtspBase}/Streaming/Channels/101`;
     }
     if (!result.sourceLabel || result.sourceLabel === "rtsp") {
       result.sourceLabel = "onvif";
@@ -675,6 +701,7 @@ export async function autoFillCamera(input: { ip?: string; port?: number; userna
   }
 
   result.last_verified_at = new Date().toISOString();
+  console.log(`[PROBE] Probe завершён для ${input.ip}: source=${result.sourceLabel}, confidence=${result.data_confidence}, profiles=${(result.profiles || []).length}, conflicts=${(result.conflicts || []).length}${result.errors?.length ? ', errors=' + result.errors.join(', ') : ''}`);
   return result;
 }
 

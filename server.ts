@@ -1364,41 +1364,108 @@ app.get(["/api/cameras/:id/passport", "/api/cameras/:id/passport/"], async (req,
   }
 });
 
-app.post(["/api/cameras/:id/passport/refresh", "/api/cameras/:id/passport/refresh/"], async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    const cam = cameras.find((c) => c.id === id);
-    if (!cam) return res.status(404).json({ detail: "Camera not found" });
+ app.post(["/api/cameras/:id/passport/refresh", "/api/cameras/:id/passport/refresh/"], async (req, res) => {
+   try {
+     const id = parseInt(req.params.id);
+     const cam = cameras.find((c) => c.id === id);
+     if (!cam) return res.status(404).json({ detail: "Camera not found" });
 
-    const { ip, port, username, password, model } = req.body || {};
-    const targetIp = ip || cam.ip_address || new URL(cam.source).hostname;
-    const targetPort = port || cam.ip_port || 554;
+     const { ip, port, username, password, model } = req.body || {};
+     const targetIp = ip || cam.ip_address || new URL(cam.source).hostname;
+     const targetPort = port || cam.ip_port || 554;
 
-    const result = await inspectCamera(
-      String(targetIp),
-      parseInt(String(targetPort), 10),
-      username ? String(username) : cam.username || undefined,
-      password ? String(password) : cam.password || undefined,
-    );
+     logInfo("Начало обновления паспорта камеры", { cameraId: id, cameraName: cam.name, ip: targetIp, port: targetPort });
 
-    const sourceLabel = resolveSourceLabel(result, cam);
+     const result = await inspectCamera(
+       String(targetIp),
+       parseInt(String(targetPort), 10),
+       username ? String(username) : cam.username || undefined,
+       password ? String(password) : cam.password || undefined,
+     );
 
-    const profiles = normalizeProbeProfiles(result);
+     logInfo("Результат probe камеры", {
+       cameraId: id,
+       reachable: result.reachable,
+       vendor: result.vendor,
+       model: result.model,
+       firmware: result.firmware,
+       onvif: result.onvif,
+       onvifProfilesCount: (result.onvif_profiles || []).length,
+       rtspProfilesCount: (result.rtsp_profiles || []).length,
+       errors: result.errors,
+       dataConfidence: result.data_confidence,
+     });
 
-    const onvifProfiles = result.onvif_profiles || [];
-    const rtspProfiles = result.rtsp_profiles || [];
-    let conflicts: any[] = [];
-    if (onvifProfiles.length && rtspProfiles.length) {
-      conflicts = compareProbeResults({ profiles: onvifProfiles } as Partial<CameraProbeResult>, { profiles: rtspProfiles } as Partial<CameraProbeResult>);
-    }
+     const sourceLabel = resolveSourceLabel(result, cam);
 
-    const aiStreamProfileId = profiles.length ? recommendAiStreamProfile(profiles) : null;
+     const profiles = normalizeProbeProfiles(result);
 
-    const dataConfidence = result.data_confidence || cam.data_confidence;
+     const onvifProfiles = result.onvif_profiles || [];
+     const rtspProfiles = result.rtsp_profiles || [];
+     let conflicts: any[] = [];
+     if (onvifProfiles.length && rtspProfiles.length) {
+       conflicts = compareProbeResults({ profiles: onvifProfiles } as Partial<CameraProbeResult>, { profiles: rtspProfiles } as Partial<CameraProbeResult>);
+     }
 
-    const streamProfilesJson = serializeStreamProfiles(profiles, conflicts.length ? conflicts : undefined);
+     if (conflicts.length) {
+       logWarn("Обнаружены конфликты между ONVIF и RTSP", {
+         cameraId: id,
+         conflictsCount: conflicts.length,
+         conflicts,
+       });
+     }
 
-    await prisma.camera.update({
+     const aiStreamProfileId = profiles.length ? recommendAiStreamProfile(profiles) : null;
+
+     logInfo("Рекомендованный AI поток", {
+       cameraId: id,
+       aiStreamProfileId,
+       totalProfiles: profiles.length,
+     });
+
+      const dataConfidence = result.data_confidence || cam.data_confidence;
+
+      const streamProfilesJson = serializeStreamProfiles(profiles, conflicts.length ? conflicts : undefined);
+
+      if (!result.reachable && profiles.length === 0) {
+        logWarn("Паспорт не обновлён: камера недоступна и профили не найдены", {
+          cameraId: id,
+          errors: result.errors,
+        });
+
+        const response: any = {
+          success: false,
+          vendor: result.vendor || cam.vendor,
+          model_name: result.model || cam.model_name,
+          model: result.model || cam.model_name,
+          firmware: result.firmware || cam.firmware,
+          serial_number: result.serial_number || cam.serial_number,
+          mac_address: result.mac_address || cam.mac_address,
+          onvif_supported: result.onvif ?? cam.onvif_supported,
+          onvif: result.onvif ?? cam.onvif_supported,
+          probe_source: sourceLabel,
+          source: sourceLabel,
+          probe_updated_at: cam.probe_updated_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          profiles: [],
+          data_confidence: dataConfidence,
+          last_verified_at: new Date().toISOString(),
+          ai_stream_profile_id: cam.ai_stream_profile_id,
+          main: result.main,
+          sub: result.sub,
+          errors: result.errors,
+        };
+
+        if (conflicts.length) {
+          response.conflicts = conflicts;
+        }
+
+        return res.json(response);
+      }
+
+      logInfo("Обновление паспорта в БД", { cameraId: id, vendor: result.vendor, model: result.model, profilesCount: profiles.length });
+
+     await prisma.camera.update({
       where: { id },
       data: {
         vendor: result.vendor || cam.vendor,
@@ -1416,21 +1483,33 @@ app.post(["/api/cameras/:id/passport/refresh", "/api/cameras/:id/passport/refres
       },
     });
 
-    updateCameraCache(id, {
-      vendor: result.vendor || cam.vendor,
-      model_name: result.model || cam.model_name,
-      firmware: result.firmware || cam.firmware,
-      serial_number: result.serial_number || cam.serial_number,
-      mac_address: result.mac_address || cam.mac_address,
-      onvif_supported: result.onvif ?? cam.onvif_supported,
-      probe_source: sourceLabel,
-      data_confidence: dataConfidence,
-      last_verified_at: new Date().toISOString(),
-      stream_profiles: streamProfilesJson,
-      ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
-    });
+     updateCameraCache(id, {
+       vendor: result.vendor || cam.vendor,
+       model_name: result.model || cam.model_name,
+       firmware: result.firmware || cam.firmware,
+       serial_number: result.serial_number || cam.serial_number,
+       mac_address: result.mac_address || cam.mac_address,
+       onvif_supported: result.onvif ?? cam.onvif_supported,
+       probe_source: sourceLabel,
+       data_confidence: dataConfidence,
+       last_verified_at: new Date().toISOString(),
+       stream_profiles: streamProfilesJson,
+       ai_stream_profile_id: aiStreamProfileId || cam.ai_stream_profile_id,
+     });
 
-    const response: any = {
+     logInfo("Паспорт камеры успешно обновлён", {
+       cameraId: id,
+       vendor: result.vendor || cam.vendor,
+       model: result.model || cam.model_name,
+       firmware: result.firmware || cam.firmware,
+       probeSource: sourceLabel,
+       dataConfidence,
+       aiStreamProfileId,
+       profilesCount: profiles.length,
+       conflictsCount: conflicts.length,
+     });
+
+     const response: any = {
       success: true,
       vendor: result.vendor || cam.vendor,
       model_name: result.model || cam.model_name,
@@ -3711,7 +3790,14 @@ async function probeCamera(cam: any): Promise<{ connected: boolean; details: str
 
     const probePath = getFfprobePath();
     const cmd = `"${probePath}" -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout 15000000 -i "${source}"`;
-    const { stdout } = await execAsync(cmd, { timeout: 10000 });
+    let stdout = "";
+    try {
+      const result = await execAsync(cmd, { timeout: 10000 });
+      stdout = result.stdout;
+    } catch (e: any) {
+      // ffprobe может вернуть exit code 1 при SEI warning, но stdout будет содержать данные
+      stdout = e.stdout || "";
+    }
     const hasStream = stdout.trim().length > 0;
 
     let conflicts: any[] = [];
@@ -4426,7 +4512,11 @@ const cameraCircuitBreakers = new Map<number, CircuitBreakerEntry>();
 // ── Zone helpers ──────────────────────────────────────────────────────────────
 
 function parseZones(raw: string | null | undefined): any[] {
-  try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
 }
 
 function loadCameraZones(cam: any): { zones: any[]; exclusionZones: any[] } {

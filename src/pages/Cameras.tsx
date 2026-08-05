@@ -116,6 +116,7 @@ export default function Cameras() {
 
   async function handleRefreshPassport() {
     if (!detailCamera || refreshRunning) return
+    console.log(`[CLIENT] Обновление паспорта камеры: ${detailCamera.name} (id=${detailCamera.id})`)
     setRefreshRunning(true)
     const steps = [
       { label: 'Ping', status: 'pending' as const },
@@ -142,6 +143,16 @@ export default function Cameras() {
         body: JSON.stringify({}),
       })
 
+      console.log(`[CLIENT] Ответ сервера (паспорт ${detailCamera.id}):`, {
+        success: data.success,
+        vendor: data.vendor,
+        model: data.model,
+        profilesCount: data.profiles?.length,
+        conflictsCount: data.conflicts?.length,
+        aiStreamProfileId: data.ai_stream_profile_id,
+        dataConfidence: data.data_confidence,
+      })
+
       setRefreshSteps(prev => prev.map((s, i) => i <= 2 ? { ...s, status: 'done' } : i === 3 ? { ...s, status: 'done', detail: `${data.profiles?.length || 0} profiles` } : i === 4 ? { ...s, status: 'active' } : s))
       await new Promise(r => setTimeout(r, 300))
 
@@ -165,6 +176,7 @@ export default function Cameras() {
         fetchCameras()
       }
     } catch (e: any) {
+      console.error(`[CLIENT] Ошибка обновления паспорта камеры ${detailCamera?.id}:`, e.message)
       setRefreshSteps(prev => prev.map(s => s.status === 'active' ? { ...s, status: 'error' } : s))
       setAlertState({ isOpen: true, title: 'Ошибка', message: 'Ошибка обновления паспорта: ' + e.message })
     } finally {
