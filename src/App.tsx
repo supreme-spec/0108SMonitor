@@ -16,6 +16,7 @@ import Settings from './pages/Settings'
 import Chronicle from './pages/Chronicle'
 import SmartRecording from './pages/SmartRecording'
 import Categories from './pages/Categories'
+import CategoryPage from './pages/CategoryPage'
 import Requirements from './pages/Requirements'
 import RequirementsV2 from './ui_v2/RequirementsV2'
 import Confirmations from './pages/Confirmations'
@@ -277,6 +278,19 @@ fetchRecentEvents()
         return <Categories />
       case 'confirmations':
         return <Confirmations />
+      // Category pages from HeroSection
+      case 'stops':
+        return <CategoryPage categoryId="stops" title="СТОПЫ" />
+      case 'not_today':
+        return <CategoryPage categoryId="not_today" title="НЕ СЕГОДНЯ" />
+      case 'guests':
+        return <CategoryPage categoryId="guests" title="ГОСТИ" />
+      case 'suite':
+        return <CategoryPage categoryId="suite" title="СВИТА" />
+      case 'staff':
+        return <CategoryPage categoryId="staff" title="ПЕРСОНАЛ" />
+      case 'vip':
+        return <CategoryPage categoryId="vip" title="VIP" />
       default:
         return (
           <LiveMonitor

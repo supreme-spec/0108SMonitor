@@ -51,6 +51,8 @@ export default function HeroSection() {
 
   const handleDBButtonClick = (id: string) => {
     setActiveDBButton(prev => prev === id ? null : id)
+    // Navigate to the category page
+    window.dispatchEvent(new CustomEvent('navigate', { detail: id }))
   }
 
   return (

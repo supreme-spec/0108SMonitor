@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+﻿import { useState, useEffect, useCallback } from 'react'
 import { Plus, Play, Square, Trash2, Search, X, Wifi, WifiOff, RefreshCw, ScanLine, Edit2, Video, Settings2 } from 'lucide-react'
 import type { Camera } from '../types'
 import { apiFetch } from '../api/client'
 import RoiEditor from '../components/RoiEditor'
 import ConfirmModal, { AlertModal } from '../components/ConfirmModal'
+import CameraSettingsModal from '../components/CameraSettingsModal'
 
 interface FoundUsb { index: number; source: string; name: string }
 interface FoundIp { ip: string; port: number; source: string; rtsp_base?: string; common_paths?: string[]; type: string }
@@ -475,9 +476,9 @@ export default function Cameras() {
               <button
                 onClick={() => setEditCamera(cam)}
                 className="p-1.5 rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-blue transition-colors"
-                title="Редактировать"
+                title="Настройки камеры"
               >
-                <Edit2 size={14} />
+                <Settings2 size={14} />
               </button>
               <button
                 onClick={() => setRoiCamera(cam)}
@@ -510,9 +511,9 @@ export default function Cameras() {
         />
       )}
 
-      {/* ── Edit camera modal ── */}
+      {/* ── Camera settings modal ── */}
       {editCamera && (
-        <EditCameraModal
+        <CameraSettingsModal
           camera={editCamera}
           onClose={() => setEditCamera(null)}
           onSaved={() => { setEditCamera(null); fetchCameras() }}
@@ -851,244 +852,6 @@ export default function Cameras() {
   )
 }
 
-// ── Edit Camera Modal ─────────────────────────────────────────────────────────
-
-interface EditModalProps {
-  camera: Camera
-  onClose: () => void
-  onSaved: () => void
-}
-
-function EditCameraModal({ camera, onClose, onSaved }: EditModalProps) {
-  const [name, setName] = useState(camera.name)
-  const [source, setSource] = useState(camera.source)
-  const [zone, setZone] = useState(camera.zone ?? '')
-  const [smartRec, setSmartRec] = useState(camera.is_smart_recording)
-  const [chronicle, setChronicle] = useState(camera.is_chronicle)
-  const [ipAddress, setIpAddress] = useState(camera.ip_address ?? '')
-  const [ipPort, setIpPort] = useState(camera.ip_port?.toString() ?? '80')
-  const [username, setUsername] = useState(camera.username ?? '')
-  const [password, setPassword] = useState(camera.password ?? '')
-  const [useAnalytics, setUseAnalytics] = useState(camera.use_camera_analytics ?? false)
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  const handleSave = async () => {
-    if (!name.trim()) { setError('Название обязательно'); return }
-    if (!source.trim()) { setError('Источник обязателен'); return }
-    setSaving(true)
-    setError('')
-    try {
-      await apiFetch(`/cameras/${camera.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          name: name.trim(),
-          source: source.trim(),
-          zone: zone.trim() || null,
-          is_smart_recording: smartRec,
-          is_chronicle: chronicle,
-          ip_address: ipAddress.trim() || null,
-          ip_port: ipPort ? parseInt(ipPort) : null,
-          username: username.trim() || null,
-          password: password || null,
-          use_camera_analytics: useAnalytics,
-        }),
-      })
-      onSaved()
-    } catch (e: any) {
-      setError(e.message || 'Ошибка сохранения')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleTestConnection = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const res = await apiFetch<{ connected: boolean; brand?: string; model?: string; driver_type?: string }>(
-        `/cameras/${camera.id}/test-connection`, { method: 'POST' }
-      )
-      setTestResult(res.connected
-        ? `✓ ${res.brand || ''} ${res.model || ''} (${res.driver_type})`
-        : '✗ Не удалось подключиться')
-    } catch (e: any) {
-      setTestResult(`✗ ${e.message || 'Ошибка'}`)
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  const isRtsp = camera.camera_type === 'RTSP' || camera.camera_type === 'IP'
-
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="panel p-6 w-full max-w-xl mx-4 animate-fade-in max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h2 className="text-kraken-text font-bold text-lg">Редактировать камеру</h2>
-            <p className="text-kraken-muted text-xs mt-0.5">{camera.camera_type} · ID {camera.id}</p>
-          </div>
-          <button onClick={onClose} className="text-kraken-muted hover:text-kraken-text">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          {/* Name */}
-          <div>
-            <label className="text-kraken-muted text-xs mb-1 block">Название *</label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
-            />
-          </div>
-
-          {/* Source — textarea для длинных RTSP путей */}
-          <div>
-            <label className="text-kraken-muted text-xs mb-1 block">
-              {isRtsp ? 'RTSP URL' : 'Индекс камеры'}
-            </label>
-            {isRtsp ? (
-              <textarea
-                value={source}
-                onChange={e => setSource(e.target.value)}
-                rows={3}
-                spellCheck={false}
-                className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple font-mono resize-none leading-relaxed"
-                placeholder="rtsp://admin:password@192.168.1.100:554/stream"
-              />
-            ) : (
-              <input
-                type="text"
-                value={source}
-                onChange={e => setSource(e.target.value)}
-                className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple font-mono"
-                placeholder="0"
-              />
-            )}
-            {/* Full path display for reference */}
-            {source && (
-              <div className="mt-1.5 bg-kraken-base border border-kraken-border rounded-lg px-3 py-2">
-                <div className="text-kraken-disabled text-[10px] uppercase tracking-wider mb-1">Полный путь</div>
-                <div className="text-kraken-muted text-xs font-mono break-all select-all">{source}</div>
-              </div>
-            )}
-          </div>
-
-          {/* Zone label */}
-          <div>
-            <label className="text-kraken-muted text-xs mb-1 block">Зона (необязательно)</label>
-            <input
-              type="text"
-              value={zone}
-              onChange={e => setZone(e.target.value)}
-              placeholder="Главный вход, Парковка..."
-              className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-kraken-purple"
-            />
-          </div>
-
-          {/* IP Camera settings */}
-          <div className="border border-kraken-border rounded-xl p-3 space-y-3">
-            <div className="text-kraken-muted text-xs uppercase tracking-widest">IP камера (необязательно)</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-kraken-muted text-[10px] mb-0.5 block">IP адрес</label>
-                <input type="text" value={ipAddress} onChange={e => setIpAddress(e.target.value)}
-                  placeholder="192.168.1.100"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono" />
-              </div>
-              <div>
-                <label className="text-kraken-muted text-[10px] mb-0.5 block">Порт</label>
-                <input type="text" value={ipPort} onChange={e => setIpPort(e.target.value)}
-                  placeholder="80"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple font-mono" />
-              </div>
-              <div>
-                <label className="text-kraken-muted text-[10px] mb-0.5 block">Логин</label>
-                <input type="text" value={username} onChange={e => setUsername(e.target.value)}
-                  placeholder="admin"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple" />
-              </div>
-              <div>
-                <label className="text-kraken-muted text-[10px] mb-0.5 block">Пароль</label>
-                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••"
-                  className="w-full bg-kraken-hover border border-kraken-border text-kraken-text text-xs px-2 py-1.5 rounded-lg focus:outline-none focus:border-kraken-purple" />
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={useAnalytics} onChange={e => setUseAnalytics(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple" />
-                <div className="flex flex-col">
-                  <span className="text-kraken-text text-[10px] font-semibold">Аналитика камеры</span>
-                  <span className="text-[9px] text-kraken-disabled">Использовать AI камеры (Hikvision/UNV)</span>
-                </div>
-              </label>
-              {camera.ip_address && (
-                <button onClick={handleTestConnection} disabled={testing}
-                  className="text-xs px-2 py-1 rounded-lg bg-kraken-blue/10 text-kraken-blue hover:bg-kraken-blue/20 disabled:opacity-50 transition-colors">
-                  {testing ? 'Проверка...' : 'Тест'}
-                </button>
-              )}
-            </div>
-            {testResult && (
-              <div className={`text-xs px-2 py-1.5 rounded-lg ${testResult.startsWith('✓') ? 'bg-kraken-green/10 text-kraken-green' : 'bg-kraken-red/10 text-kraken-red'}`}>
-                {testResult}
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-4 p-3 bg-kraken-base rounded-xl border border-kraken-border">
-            <label className="flex-1 flex items-center gap-2 cursor-pointer group">
-              <input
-                type="checkbox"
-                checked={smartRec}
-                onChange={e => setSmartRec(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple"
-              />
-              <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-purple transition-colors">Умная съёмка</span>
-                <span className="text-[10px] text-kraken-disabled">Запись 15с при обнаружении</span>
-              </div>
-            </label>
-            <div className="w-px bg-kraken-border h-8 self-center" />
-            <label className="flex-1 flex items-center gap-2 cursor-pointer group">
-              <input
-                type="checkbox"
-                checked={chronicle}
-                onChange={e => setChronicle(e.target.checked)}
-                className="w-4 h-4 rounded border-kraken-border text-kraken-purple focus:ring-kraken-purple"
-              />
-              <div className="flex flex-col">
-                <span className="text-kraken-text text-xs font-semibold group-hover:text-kraken-purple transition-colors">Фотохроника</span>
-                <span className="text-[10px] text-kraken-disabled">Снимок посетителя в день</span>
-              </div>
-            </label>
-          </div>
-
-          {error && (
-            <div className="text-kraken-red text-sm bg-kraken-red/10 px-3 py-2 rounded-lg">
-              {error}
-            </div>
-          )}
-
-          <div className="flex gap-3 mt-1">
-            <button onClick={onClose} className="btn-ghost flex-1">Отмена</button>
-            <button onClick={handleSave} disabled={saving} className="btn-primary flex-1">
-              {saving ? 'Сохранение...' : 'Сохранить'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // ── Add Camera Modal ──────────────────────────────────────────────────────────
 
@@ -1474,3 +1237,4 @@ function ActiveWindowsTab({ camera, settings, loading, saving, onSave, onPopulat
     </div>
   )
 }
+

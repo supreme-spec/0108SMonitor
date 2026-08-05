@@ -17,11 +17,15 @@ function fmtDT(iso: string | null | undefined) {
   const d = new Date(iso); return isNaN(d.getTime()) ? '—' : d.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })
 }
 
-export default function People() {
+interface PeopleProps {
+  initialCategory?: string
+}
+
+export default function People({ initialCategory }: PeopleProps = {}) {
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filterCat, setFilterCat] = useState<string>('')
+  const [filterCat, setFilterCat] = useState<string>(initialCategory || '')
   const [sortBy, setSortBy] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [showAdd, setShowAdd] = useState(false)
@@ -91,8 +95,15 @@ export default function People() {
     }
   }, [search, filterCat, sortBy, sortDir])
 
-  useEffect(() => { 
-    fetchPeople(); 
+  useEffect(() => {
+    // Update filterCat when initialCategory changes
+    if (initialCategory) {
+      setFilterCat(initialCategory)
+    }
+  }, [initialCategory])
+
+  useEffect(() => {
+    fetchPeople();
     fetchFailedEmbeddings();
   }, [fetchPeople, fetchFailedEmbeddings])
 
