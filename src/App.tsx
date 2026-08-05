@@ -167,9 +167,13 @@ export default function App() {
           if (prev.some(c => c.confirmation_id === conf.confirmation_id)) return prev
           return [...prev, conf]
         })
-        fetchRecentEvents()
-      }
-    } catch (err) {
+fetchRecentEvents()
+       } else if (msg.type === 'LOYALTY_UPDATED') {
+         window.dispatchEvent(new CustomEvent('loyalty-updated', {
+           detail: { personId: msg.personId, loyaltyIndex: msg.loyaltyIndex },
+         }))
+       }
+     } catch (err) {
       clientLogger.error(err as Error, { context: 'WebSocket message' })
     }
   }

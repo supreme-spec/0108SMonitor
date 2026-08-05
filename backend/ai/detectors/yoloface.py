@@ -32,10 +32,8 @@ class YOLOFace(BaseDetector):
 
     async def detect(self, image_bytes: bytes, det_size: int = 640) -> list:
         """Детектировать лица на изображении"""
-        # TODO: Реализовать детекцию через Python-сервер
-        return []
+        raise NotImplementedError(f"{self.info.name} is not yet implemented. Falling back to SCRFD.")
 
     async def detect_with_embedding(self, image_bytes: bytes, det_size: int = 640) -> list:
         """Детектировать лица и извлечь эмбеддинги"""
-        # TODO: Реализовать детекцию с эмбеддингами
-        return []
+        raise NotImplementedError(f"{self.info.name} is not yet implemented. Falling back to SCRFD.")

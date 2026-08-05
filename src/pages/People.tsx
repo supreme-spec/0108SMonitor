@@ -2518,8 +2518,17 @@ function DeleteCategoryModal({ categories, onClose, onDone }: {
           setDeleting(false)
         }
       }
-    })
+})
   }
+
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      const { personId, loyaltyIndex } = e.detail as { personId: number; loyaltyIndex: number }
+      setPeople(prev => prev.map(p => p.id === personId ? { ...p, loyalty_index: loyaltyIndex } : p))
+    }
+    window.addEventListener('loyalty-updated', handler as EventListener)
+    return () => window.removeEventListener('loyalty-updated', handler as EventListener)
+  }, [])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>

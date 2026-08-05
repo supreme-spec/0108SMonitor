@@ -40,6 +40,7 @@ import {
   addEmbeddingToPerson,
 } from "./face-engine.js";
 import { prisma } from "./db.js";
+import { startLoyaltyWorker, setBroadcastFn } from "./loyalty-worker.js";
 import logger, { logInfo, logError, logWarn, logDebug } from "./src/lib/logger.js";
 
 // ── __filename / __dirname ────────────────────────────────────────────────────
@@ -4046,11 +4047,8 @@ function stopFileRecording(camId: number): boolean {
 // ── Сохранение снимков и событий распознавания (живой поток) ──────────────────
 const RECOGNIZED_DEBOUNCE_MS = 15_000;
 const UNKNOWN_DEBOUNCE_MS = 20_000;
-const UNKNOWN_PERSON_COOLDOWN_MS = 60_000;
 // cameraId:personKey -> последнее время события (чтобы не спамить БД)
 const lastEventAt = new Map<string, number>();
-// cameraId -> последнее время создания персоны из неизвестного (защита от дублей)
-const lastUnknownPersonAt = new Map<string, number>();
 
 function saveSnapshotFromFrame(frameBase64: string, cameraId: number, label?: string): string {
   try {
@@ -4074,7 +4072,8 @@ function saveSnapshotFromFrame(frameBase64: string, cameraId: number, label?: st
 async function persistAndBroadcastEvent(e: {
   cameraId: number;
   cameraName: string;
-  personId?: number;
+  personId?: number | null;
+  guestId?: number | null;
   event_type: string;
   confidence: number;
   snapshot_path: string;
@@ -4090,7 +4089,8 @@ async function persistAndBroadcastEvent(e: {
       data: {
         camera_id: e.cameraId,
         camera_name: e.cameraName,
-        person_id: e.personId,
+        person_id: e.personId ?? null,
+        guest_id: e.guestId ?? null,
         event_type: e.event_type,
         confidence: e.confidence,
         snapshot_path: e.snapshot_path,
@@ -4107,6 +4107,7 @@ async function persistAndBroadcastEvent(e: {
         type: "ALERT",
         category: (e.person_category as any) || "UNKNOWN",
         person_id: e.personId ?? 0,
+        guest_id: e.guestId ?? null,
         person_name: e.person_name || "Неизвестный",
         camera_id: e.cameraId,
         confidence: e.confidence,
@@ -4128,82 +4129,75 @@ function triggerSmartRecording(cam: any) {
 }
 
 async function handleRecognizedEvent(cam: any, match: any, frameBase64: string) {
-  let event_type = "RECOGNIZED";
-  if (match.category === "VIP") event_type = "VIP_ARRIVAL";
-  else if (match.category === "BLACKLIST") event_type = "BLACKLIST_ALERT";
-  else if (match.category === "RESPONSE") event_type = "RESPONSE_ALERT";
+   let event_type = "RECOGNIZED";
+   if (match.category === "VIP") event_type = "VIP_ARRIVAL";
+   else if (match.category === "BLACKLIST") event_type = "BLACKLIST_ALERT";
+   else if (match.category === "RESPONSE") event_type = "RESPONSE_ALERT";
 
-  const confidence = match.similarity;
-  const meetsVerification = confidence * 100 >= verification_threshold_pct;
-  const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id, match.personName);
-  recordVisitor(cam.id, match.personId, match.personName, snapshot_path);
+   const confidence = match.similarity;
+   const meetsVerification = confidence * 100 >= verification_threshold_pct;
+   const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id, match.personName);
+   recordVisitor(cam.id, match.personId, match.personName, snapshot_path);
 
-  try {
-    await prisma.person.update({
-      where: { id: match.personId },
-      data: { visit_count: { increment: 1 }, last_seen_at: new Date() },
-    });
-    // Record visit in person_visits table and recalculate loyalty
-    try {
-      await prisma.personVisit.create({
-        data: {
-          person_id: match.personId,
-          camera_id: cam.id,
-          camera_name: cam.name,
-          confidence: confidence,
-          source: "recognition",
-        },
-      });
-      const visits = await prisma.personVisit.findMany({
-        where: { person_id: match.personId },
-        select: { visit_date: true },
-        orderBy: { visit_date: "desc" },
-      });
-      const loyalty = calculateLoyaltyIndex(visits);
-      await prisma.person.update({
-        where: { id: match.personId },
-        data: { loyalty_index: loyalty, total_visits: { increment: 1 } },
-      });
-    } catch { /* ignore */ }
-  } catch { /* ignore */ }
-  const idx = persons.findIndex((p: any) => p.id === match.personId);
-  if (idx >= 0) {
-    persons[idx].visit_count = (persons[idx].visit_count || 0) + 1;
-    persons[idx].last_seen_at = new Date().toISOString();
-    persons[idx].total_visits = (persons[idx].total_visits || 0) + 1;
-  }
-  const person = idx >= 0 ? persons[idx] : undefined;
+   const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
-  // Update loyalty_index in cache (async, non-blocking)
-  if (idx >= 0) {
-    (async () => {
-      try {
-        const visits = await prisma.personVisit.findMany({
-          where: { person_id: match.personId },
-          select: { visit_date: true },
-          orderBy: { visit_date: "desc" },
-        });
-        persons[idx].loyalty_index = calculateLoyaltyIndex(visits);
-      } catch { /* ignore */ }
-    })();
-  }
+   try {
+     await prisma.person.update({
+       where: { id: match.personId },
+       data: { visit_count: { increment: 1 }, last_seen_at: new Date() },
+     });
 
-  await persistAndBroadcastEvent({
-    cameraId: cam.id,
-    cameraName: cam.name,
-    personId: match.personId,
-    event_type,
-    confidence,
-    snapshot_path,
-    person_name: match.personName,
-    person_category: match.category,
-    person_photo_path: person?.photo_path,
-    needs_operator_confirmation: !meetsVerification,
-    confirmation_status: !meetsVerification ? "pending" : undefined,
-  });
+     try {
+       const recentVisit = await prisma.personVisit.findFirst({
+         where: { person_id: match.personId, camera_id: cam.id },
+         orderBy: { visit_date: 'desc' },
+       });
 
-  triggerSmartRecording(cam);
-}
+       const now = Date.now();
+       const isSessionActive = recentVisit && (now - new Date(recentVisit.visit_date).getTime()) < SESSION_TIMEOUT_MS;
+
+       if (!isSessionActive) {
+         await prisma.personVisit.create({
+           data: {
+             person_id: match.personId,
+             camera_id: cam.id,
+             camera_name: cam.name,
+             confidence: confidence,
+             source: "recognition",
+           },
+         });
+         await prisma.person.update({
+           where: { id: match.personId },
+           data: { needsLoyaltyUpdate: true },
+         });
+       }
+     } catch { /* ignore */ }
+   } catch { /* ignore */ }
+
+   const idx = persons.findIndex((p: any) => p.id === match.personId);
+   if (idx >= 0) {
+     persons[idx].visit_count = (persons[idx].visit_count || 0) + 1;
+     persons[idx].last_seen_at = new Date().toISOString();
+     persons[idx].total_visits = (persons[idx].total_visits || 0) + 1;
+   }
+   const person = idx >= 0 ? persons[idx] : undefined;
+
+   await persistAndBroadcastEvent({
+     cameraId: cam.id,
+     cameraName: cam.name,
+     personId: match.personId,
+     event_type,
+     confidence,
+     snapshot_path,
+     person_name: match.personName,
+     person_category: match.category,
+     person_photo_path: person?.photo_path,
+     needs_operator_confirmation: !meetsVerification,
+     confirmation_status: !meetsVerification ? "pending" : undefined,
+   });
+
+   triggerSmartRecording(cam);
+ }
 
 /**
  * Вырезает лицо из кадра по детектированному боксу с запасом по краям.
@@ -4278,6 +4272,14 @@ async function createUnknownGuestFromFace(
 }
 
 async function handleUnknownEvent(cam: any, frameBase64: string, face?: any) {
+   const bboxKey = `${face?.box?.x ?? 0}-${face?.box?.y ?? 0}-${face?.box?.width ?? 0}-${face?.box?.height ?? 0}`;
+   const debounceKey = `${cam.id}:unknown:${bboxKey}`;
+
+   if (Date.now() - (lastEventAt.get(debounceKey) || 0) < UNKNOWN_DEBOUNCE_MS) {
+     return;
+   }
+   lastEventAt.set(debounceKey, Date.now());
+
    const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id);
 
    let guestId: number | null = null;
@@ -4286,22 +4288,17 @@ async function handleUnknownEvent(cam: any, frameBase64: string, face?: any) {
    let guestPhotoPath: string | undefined;
 
    if (auto_create_unknown_persons) {
-     const key = `${cam.id}:unknown-create`;
-     const now = Date.now();
-     if (now - (lastUnknownPersonAt.get(key) || 0) > UNKNOWN_PERSON_COOLDOWN_MS) {
-       try {
-         const created = await createUnknownGuestFromFace(cam, frameBase64, face);
-         if (created) {
-           guestId = created.id;
-           guestName = created.name;
-           guestCategory = created.category;
-           lastUnknownPersonAt.set(key, now);
-           const g = await prisma.guest.findUnique({ where: { id: created.id } });
-           guestPhotoPath = g?.photo_path;
-         }
-       } catch (e) {
-         logError(e as Error, { context: "auto-create unknown guest" });
+     try {
+       const created = await createUnknownGuestFromFace(cam, frameBase64, face);
+       if (created) {
+         guestId = created.id;
+         guestName = created.name;
+         guestCategory = created.category;
+         const g = await prisma.guest.findUnique({ where: { id: created.id } });
+         guestPhotoPath = g?.photo_path;
        }
+     } catch (e) {
+       logError(e as Error, { context: "auto-create unknown guest" });
      }
    }
 
@@ -4310,8 +4307,9 @@ async function handleUnknownEvent(cam: any, frameBase64: string, face?: any) {
    await persistAndBroadcastEvent({
      cameraId: cam.id,
      cameraName: cam.name,
-     personId: guestId,
-     event_type: "UNKNOWN",
+     personId: null,
+     guestId: guestId,
+     event_type: "UNKNOWN_PERSON",
      confidence: face?.score || 0.5,
      snapshot_path,
      person_name: guestName || "Неизвестный",
@@ -4386,11 +4384,12 @@ async function processDetectedFaces(cam: any, frameBase64: string, faces: any[])
         confidence: f.score || 0,
         box: f.box,
       });
-      const key = `${cam.id}:unknown`;
-      if (Date.now() - (lastEventAt.get(key) || 0) > UNKNOWN_DEBOUNCE_MS) {
-        lastEventAt.set(key, Date.now());
-        await handleUnknownEvent(cam, frameBase64, f);
-      }
+const bboxKey = `${f.box?.x ?? 0}-${f.box?.y ?? 0}-${f.box?.width ?? 0}-${f.box?.height ?? 0}`;
+       const key = `${cam.id}:unknown:${bboxKey}`;
+       if (Date.now() - (lastEventAt.get(key) || 0) > UNKNOWN_DEBOUNCE_MS) {
+         lastEventAt.set(key, Date.now());
+         await handleUnknownEvent(cam, frameBase64, f);
+       }
     }
   }
   return enriched;
@@ -4700,12 +4699,11 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
     // При переподключении камеры старый session_id становится недействительным —
     // клиенты сбрасывают треки, а debounce-кэши очищаются.
     const isRestart = cameraSessionIds.has(cam.id);
-    if (isRestart) {
-      const prefix = `${cam.id}:`;
-      for (const key of lastEventAt.keys()) { if (key.startsWith(prefix)) lastEventAt.delete(key); }
-      for (const key of lastConfirmationAt.keys()) { if (key.startsWith(prefix)) lastConfirmationAt.delete(key); }
-      for (const key of lastUnknownPersonAt.keys()) { if (key.startsWith(prefix)) lastUnknownPersonAt.delete(key); }
-    }
+     if (isRestart) {
+       const prefix = `${cam.id}:`;
+       for (const key of lastEventAt.keys()) { if (key.startsWith(prefix)) lastEventAt.delete(key); }
+       for (const key of lastConfirmationAt.keys()) { if (key.startsWith(prefix)) lastConfirmationAt.delete(key); }
+     }
     cameraSessionIds.set(cam.id, crypto.randomUUID());
     const sessionId = cameraSessionIds.get(cam.id)!;
     cameraFrameQueues.set(cam.id, []);
@@ -5958,10 +5956,13 @@ async function start() {
   
   const engineStatus = getEngineStatus();
   if (engineStatus.initialized) {
-    logInfo("AI Face Engine инициализирован и дескрипторы загружены");
+    logInfo("AI Face Engine инициализирована и дескрипторы загружены");
   } else {
     logWarn("AI Face Engine не удалось инициализировать — работаем в mock-режиме");
   }
+
+  startLoyaltyWorker();
+  setBroadcastFn(broadcastSecurity);
 
   // В dev фронтенд (SPA + HMR) отдаётся автономным Vite на :5173 (см. vite.config.ts,
   // который проксирует /api и /ws на :3000). Это стабильный HMR, независимый от

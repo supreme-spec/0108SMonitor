@@ -76,10 +76,11 @@ model Guest {
   confidence   Float?
   camera_id    Int?
   camera_name  String?
+  events       Event[]
 }
 
 model Person {
-  id                 Int                @id @default(autoincrement())
+  id                 Int      @id @default(autoincrement())
   name               String
   category           String
   position           String?
@@ -112,6 +113,10 @@ model Person {
   confirmations      FaceConfirmation[]
   photos             PersonPhoto[]
   visits             PersonVisit[]
+  loyaltyIndex       Int      @default(0)
+  needsLoyaltyUpdate Boolean  @default(false)
+
+  @@index([needsLoyaltyUpdate])
 }
 
 model PersonVisit {
@@ -182,6 +187,7 @@ model Event {
   camera_id                   Int
   camera_name                 String
   person_id                   Int?
+  guest_id                    Int?
   event_type                  String
   confidence                  Float
   snapshot_path               String?
@@ -193,10 +199,12 @@ model Event {
   confirmation_status         String?
   confirmation_id             Int?
   person                      Person?  @relation(fields: [person_id], references: [id])
+  guest                       Guest?   @relation(fields: [guest_id], references: [id], onDelete: Cascade)
   camera                      Camera   @relation(fields: [camera_id], references: [id], onDelete: Cascade)
 
   @@index([camera_id])
   @@index([person_id])
+  @@index([guest_id])
   @@index([created_at])
   @@index([confirmation_id])
 }

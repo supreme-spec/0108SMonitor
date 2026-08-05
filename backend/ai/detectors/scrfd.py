@@ -82,7 +82,8 @@ class SCRFD(BaseDetector):
                 pad_x = 0
                 pad_y = 0
 
-            faces = self._face_app.get(img_rgb)
+            det_thresh = self.config.get('min_det_score', 0.5) if self.config else 0.5
+            faces = self._face_app.get(img_rgb, det_thresh=det_thresh, max_num=20)
 
             results = []
             for face in faces:
