@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Bell, ChevronDown, Camera as CameraIcon } from 'lucide-react'
+import { ChevronDown, Camera as CameraIcon } from 'lucide-react'
 import type { Camera } from '../types'
+import AlertBell from './AlertBell'
 import rusImg from '../assets/images/imperial_flag_full_bleed_1783510617289.jpg'
 import logoImg from '../assets/images/einfach_logo_1783510147919.jpg'
 
@@ -136,17 +137,7 @@ export default function TopBar({
         )}
 
         {/* Alerts bell */}
-        <button
-          onClick={onOpenAlerts}
-          className="relative w-10 h-10 flex items-center justify-center rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-text transition-colors"
-        >
-          <Bell size={16} />
-          {alertCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-kraken-red rounded-full text-white text-[10px] flex items-center justify-center font-bold px-0.5">
-              {alertCount > 9 ? '9+' : alertCount}
-            </span>
-          )}
-        </button>
+        <AlertBell />
 
         <div className="w-px h-6 bg-kraken-border mx-1" />
 

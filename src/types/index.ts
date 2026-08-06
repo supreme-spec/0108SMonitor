@@ -138,14 +138,20 @@ export interface FrameMessage {
 
 export interface AlertMessage {
   type: 'ALERT'
-  category: 'BLACKLIST' | 'VIP' | 'RESPONSE' | 'SECURITY'
+  eventId?: number | null
+  category: 'BLACKLIST' | 'VIP' | 'RESPONSE' | 'SECURITY' | 'NOT_TODAY' | 'SUITE' | 'CLIENT' | 'STAFF'
+  categoryCode?: string
+  level?: 'critical' | 'warning' | 'info'
   person_id: number
   person_name: string
   camera_id: number
+  doorName?: string
   confidence: number
   snapshot_path?: string
-  photo_path?: string   // person's registered photo (fallback when snapshot missing)
+  photo_path?: string
+  message?: string
   timestamp: string
+  at?: string
 }
 
 /**

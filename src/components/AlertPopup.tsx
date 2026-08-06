@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { X, AlertTriangle, Star, User, Siren, Shield } from 'lucide-react'
+import { X, AlertTriangle, Star, User, Siren, Shield, Check } from 'lucide-react'
 import type { AlertMessage } from '../types'
 import { PHOTO_BASE } from '../api/client'
 
 interface Props {
   alert: AlertMessage | null
   onDismiss: () => void
+  onAck?: (eventId: number) => void
 }
 
 // Remap ArcFace cosine similarity [0.28..0.85] → [0%..100%]
@@ -14,7 +15,7 @@ function cosineToPercent(cosine: number): number {
   return Math.round(((clamped - 0.28) / (0.85 - 0.28)) * 100)
 }
 
-export default function AlertPopup({ alert, onDismiss }: Props) {
+export default function AlertPopup({ alert, onDismiss, onAck }: Props) {
   const [visible, setVisible] = useState(false)
   const [snapshotFailed, setSnapshotFailed] = useState(false)
   const [photoFailed, setPhotoFailed] = useState(false)
@@ -24,21 +25,23 @@ export default function AlertPopup({ alert, onDismiss }: Props) {
       setVisible(true)
       setSnapshotFailed(false)
       setPhotoFailed(false)
-      if (alert.category === 'VIP') {
+      // VIP — info level, auto-dismiss after 5s
+      if (alert.level === 'info' || alert.category === 'VIP') {
         const t = setTimeout(() => {
           setVisible(false)
           setTimeout(onDismiss, 300)
         }, 5000)
         return () => clearTimeout(t)
       }
-      // RESPONSE — автозакрытие через 8 секунд
-      if (alert.category === 'RESPONSE') {
+      // Warning (NOT_TODAY, SUITE) — auto-dismiss after 8s
+      if (alert.level === 'warning') {
         const t = setTimeout(() => {
           setVisible(false)
           setTimeout(onDismiss, 300)
         }, 8000)
         return () => clearTimeout(t)
       }
+      // Critical (BLACKLIST) — sticky, no auto-dismiss
     } else {
       setVisible(false)
     }
@@ -46,10 +49,9 @@ export default function AlertPopup({ alert, onDismiss }: Props) {
 
   if (!alert) return null
 
-  const isBlacklist = alert.category === 'BLACKLIST'
-  const isResponse  = alert.category === 'RESPONSE'
-  const isVip       = alert.category === 'VIP'
-  const isSecurity  = alert.category === 'SECURITY'
+  const isBlacklist = alert.category === 'BLACKLIST' || alert.level === 'critical'
+  const isWarning = alert.level === 'warning'
+  const isVip = alert.category === 'VIP' || alert.level === 'info'
 
   let photoUrl: string | null = null
   if (!snapshotFailed && alert.snapshot_path) {
@@ -59,27 +61,23 @@ export default function AlertPopup({ alert, onDismiss }: Props) {
   }
 
   const borderClass = isBlacklist ? 'border-kraken-red shadow-glow-red'
-    : isResponse  ? 'border-kraken-orange shadow-glow-orange'
-    : isSecurity  ? 'border-kraken-gold'
+    : isWarning  ? 'border-kraken-orange shadow-glow-orange'
     : 'border-kraken-green shadow-glow-green'
 
   const bgStyle = isBlacklist ? 'rgba(32, 15, 20, 0.75)'
-    : isResponse  ? 'rgba(32, 21, 15, 0.75)'
-    : isSecurity  ? 'rgba(20, 18, 15, 0.75)'
+    : isWarning  ? 'rgba(32, 21, 15, 0.75)'
     : 'rgba(11, 24, 20, 0.75)'
 
   const titleColor = isBlacklist ? 'text-kraken-red'
-    : isResponse  ? 'text-kraken-orange'
-    : isSecurity  ? 'text-kraken-gold'
+    : isWarning  ? 'text-kraken-orange'
     : 'text-kraken-green'
 
   const titleText = isBlacklist ? '⚠ ЧЁРНЫЙ СПИСОК'
-    : isResponse  ? '🚨 РЕАГИРОВАНИЕ'
-    : isSecurity  ? '🛡 ОХРАНА'
+    : isWarning  ? '⚠ ВНИМАНИЕ'
     : '⭐ VIP Прибыл'
 
-  const Icon = isBlacklist ? AlertTriangle : isResponse ? Siren : isSecurity ? Shield : Star
-  const iconColor = isBlacklist ? 'text-kraken-red' : isResponse ? 'text-kraken-orange' : isSecurity ? 'text-kraken-gold' : 'text-kraken-green'
+  const Icon = isBlacklist ? AlertTriangle : isWarning ? Siren : Star
+  const iconColor = isBlacklist ? 'text-kraken-red' : isWarning ? 'text-kraken-orange' : 'text-kraken-green'
 
   return (
     <div
@@ -106,7 +104,9 @@ export default function AlertPopup({ alert, onDismiss }: Props) {
           <Icon size={28} className={`${iconColor} flex-shrink-0`} />
           <div>
             <div className={`font-bold text-lg ${titleColor}`}>{titleText}</div>
-            <div className="text-kraken-muted text-xs">Камера {alert.camera_id}</div>
+            <div className="text-kraken-muted text-xs">
+              {alert.doorName ?? `Камера ${alert.camera_id}`}
+            </div>
           </div>
         </div>
 
@@ -142,16 +142,20 @@ export default function AlertPopup({ alert, onDismiss }: Props) {
           </div>
         </div>
 
-        {/* Action button for BLACKLIST and RESPONSE */}
-        {(isBlacklist || isResponse) && (
+        {/* Action button for BLACKLIST and WARNING */}
+        {(isBlacklist || isWarning) && (
           <button
-            onClick={onDismiss}
-            className={`mt-4 w-full text-center px-4 py-2 rounded-lg font-medium transition-colors text-white ${
+            onClick={() => {
+              if (alert.eventId && onAck) onAck(alert.eventId)
+              onDismiss()
+            }}
+            className={`mt-4 w-full text-center px-4 py-2 rounded-lg font-medium transition-colors text-white flex items-center justify-center gap-2 ${
               isBlacklist
                 ? 'bg-kraken-red hover:bg-kraken-red-active'
                 : 'bg-kraken-orange hover:bg-kraken-orange-hover'
             }`}
           >
+            <Check size={14} />
             Принято
           </button>
         )}
@@ -159,3 +163,4 @@ export default function AlertPopup({ alert, onDismiss }: Props) {
     </div>
   )
 }
+

@@ -4,12 +4,13 @@ import crypto from "crypto";
 import * as os from "os";
 import { platform } from "os";
 import fs from "fs";
+import { promises as fsp } from "fs";
 import http from "http";
 import multer from "multer";
 import iconv from "iconv-lite";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
-import { spawn, exec, execSync, ChildProcessWithoutNullStreams } from "child_process";
+import { spawn, exec, execSync, ChildProcess, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 import { createRequire } from "module";
 import { FormData } from "formdata-node";
@@ -66,6 +67,21 @@ const HOST = process.env.HOST || "0.0.0.0";
 // Опциональный API-ключ. Если задан — сервер требует его на всех /api и /ws.
 // Если не задан — сервер работает открыто (dev), но выводит предупреждение.
 const API_KEY = process.env.API_KEY || "";
+
+// ═══ B. OBSERVABLE ERRORS ═══════════════════════════════════
+const errorCounters = new Map<string, number>()
+
+function reportError(scope: string, err: unknown, extra?: Record<string, unknown>): void {
+  const n = (errorCounters.get(scope) ?? 0) + 1
+  errorCounters.set(scope, n)
+  const msg = err instanceof Error ? err.message : String(err)
+  logError(`[ERR:${scope}] #${n} ${msg}`, extra ?? '')
+  if (n === 1 || n % 10 === 0) {
+    try {
+      broadcastSecurity({ type: "system-warning", scope, count: n, message: msg, at: new Date().toISOString() })
+    } catch { /* ws ещё не готов */ }
+  }
+}
 
 app.use(express.json());
 
@@ -807,7 +823,7 @@ app.post(["/api/webhook/unv/:secret", "/api/webhook/unv/:secret/"], unvWebhookUp
         const eventConfidence = confidence || 0.85;
         const meetsVerification = (eventConfidence * 100) >= verification_threshold_pct;
 
-        await prisma.event.create({
+        const event = await prisma.event.create({
           data: {
             camera_id: camera.id,
             camera_name: camera.name,
@@ -818,26 +834,20 @@ app.post(["/api/webhook/unv/:secret", "/api/webhook/unv/:secret/"], unvWebhookUp
             person_name: matchedPerson.name,
             person_category: matchedPerson.category,
             person_photo_path: matchedPerson.photo_path,
+            categoryCode: matchedPerson.category,
             needs_operator_confirmation: !meetsVerification,
-    confirmation_status: !meetsVerification ? "pending" : undefined,
+            confirmation_status: !meetsVerification ? "pending" : undefined,
           },
         });
 
-        if (matchedPerson.category === "VIP") {
-          broadcastSecurity({ type: "EVENT" });
-        } else {
-          broadcastSecurity({
-            type: "ALERT",
-            category: matchedPerson.category,
-            person_id: matchedPerson.id,
-            person_name: matchedPerson.name,
-            camera_id: camera.id,
-            confidence: eventConfidence,
-            snapshot_path,
-            timestamp: new Date().toISOString(),
-          });
-          broadcastSecurity({ type: "EVENT" });
-        }
+        await emitPersonAlert({
+          person: { id: matchedPerson.id, name: matchedPerson.name, categoryCode: matchedPerson.category },
+          camera: { id: camera.id, name: camera.name, zone: camera.zone },
+          eventId: event.id,
+          snapshotUrl: snapshot_path ? `/snapshots/${snapshot_path}` : null,
+        })
+
+        broadcastSecurity({ type: "EVENT" });
       } else {
         await prisma.event.create({
           data: {
@@ -848,11 +858,14 @@ app.post(["/api/webhook/unv/:secret", "/api/webhook/unv/:secret/"], unvWebhookUp
             snapshot_path,
             person_name: personName || "Неизвестный",
             person_category: "CLIENT",
+            categoryCode: "CLIENT",
           },
         });
+
         broadcastSecurity({
           type: "ALERT",
           category: "CLIENT",
+          person_id: 0,
           person_name: personName || "Неизвестный",
           camera_id: camera.id,
           confidence: confidence || 0.5,
@@ -2884,9 +2897,29 @@ app.get(["/api/events", "/api/events/"], async (req, res) => {
     const eventsFromDB = await prisma.event.findMany({
       orderBy: { created_at: "desc" },
       take: limit,
-      include: { person: { select: { photo_path: true } } },
+      include: {
+        person: { include: { photos: { take: 1 } } },
+        camera: true,
+      },
     });
-    res.json(eventsFromDB);
+
+    // Enrich with last category change per person
+    const personIds = [...new Set(eventsFromDB.filter(e => e.person_id).map(e => e.person_id!))]
+    const changes = personIds.length > 0 ? await prisma.personCategoryHistory.findMany({
+      where: { person_id: { in: personIds } },
+      orderBy: { created_at: "desc" },
+    }) : []
+    const lastChange = new Map<number, any>()
+    for (const c of changes) {
+      if (!lastChange.has(c.person_id)) lastChange.set(c.person_id, c)
+    }
+
+    const enriched = eventsFromDB.map(e => ({
+      ...e,
+      lastCategoryChange: e.person_id ? (lastChange.get(e.person_id) ?? null) : null,
+    }))
+
+    res.json(enriched);
   } catch (err) {
     logError(err as Error, { path: "/api/events", method: "GET" });
     res.status(500).json({ detail: "Internal server error" });
@@ -3728,6 +3761,60 @@ function broadcastSecurity(data: any) {
   }
 }
 
+// ═══ ALERT ENGINE ═════════════════════════════════════════════════════════════
+const ALERT_COOLDOWN_MS = 5 * 60_000   // персона + дверь
+const ON_SITE_WINDOW_MS = 30 * 60_000  // «на территории»
+const alertCooldown = new Map<string, number>()
+
+type AlertLevel = 'critical' | 'warning' | 'info'
+
+function alertLevelFor(code: string | null | undefined): AlertLevel | null {
+  switch (code) {
+    case 'BLACKLIST': return 'critical'
+    case 'NOT_TODAY':
+    case 'SUITE':     return 'warning'
+    case 'VIP':       return 'info'
+    default:          return null
+  }
+}
+
+async function emitPersonAlert(opts: {
+  person: { id: number; name: string; categoryCode: string | null }
+  camera: { id: number; name?: string | null; zone?: string | null }
+  eventId?: number
+  snapshotUrl?: string | null
+  message?: string
+  force?: boolean
+}) {
+  const level = alertLevelFor(opts.person.categoryCode)
+  if (!level) return
+
+  const key = `${opts.person.id}:${opts.camera.id}`
+  const now = Date.now()
+  if (!opts.force && now - (alertCooldown.get(key) ?? 0) < ALERT_COOLDOWN_MS) return
+  alertCooldown.set(key, now)
+
+  if (opts.eventId) {
+    await prisma.event
+      .update({ where: { id: opts.eventId }, data: { alerted: true } })
+      .catch(() => {})
+  }
+
+  broadcastSecurity({
+    type: "ALERT",
+    eventId: opts.eventId ?? null,
+    personId: opts.person.id,
+    personName: opts.person.name,
+    categoryCode: opts.person.categoryCode,
+    level,
+    cameraId: opts.camera.id,
+    doorName: opts.camera.name || `Зона ${opts.camera.zone ?? '?'}`,
+    snapshotUrl: opts.snapshotUrl ?? null,
+    message: opts.message ?? `${opts.person.name} · ${opts.person.categoryCode}`,
+    at: new Date().toISOString(),
+  })
+}
+
 // ── FFmpeg helpers (shared by live stream + file recording) ────────────────────
 function getFfmpegPath(): string {
   const projectBinPath = path.join(process.cwd(), "bin", "ffmpeg.exe");
@@ -3961,15 +4048,15 @@ function recordToChronicle(rec: any) {
 }
 
 /** Добавляет посетителя в in-memory «Хронику» (вкладка Архив фото). */
-function recordVisitor(cameraId: number, person_id: number | null, person_name: string, snapshot_path: string) {
+async function recordVisitor(cameraId: number, person_id: number | null, person_name: string, snapshot_path: string) {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
   const time = now.toISOString().slice(11, 19);
   const filename = path.basename(snapshot_path);
   let size_kb = 0;
   try {
-    const stat = fs.statSync(path.join(publicDir, snapshot_path));
-    size_kb = Math.round(stat.size / 1024);
+    const st = await fsp.stat(path.join(publicDir, snapshot_path)).catch(() => null);
+    if (st) size_kb = Math.round(st.size / 1024);
   } catch { /* ignore */ }
   const visitor: Visitor = {
     filename,
@@ -3997,8 +4084,9 @@ async function startFileRecording(cam: any, durationSec?: number): Promise<strin
     args.push("-r", "10", "-s", "640x480", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-movflags", "+faststart", outputPath);
 
     logInfo(`FFmpeg запись старт для камеры ${cam.id} (${cam.name}) → ${outputPath}`, { durationSec });
-    const proc = spawn(ffmpegPath, args);
-    proc.stderr.on("data", (d) => logDebug(`FFmpeg(rec ${cam.id}): ${d.toString().trim()}`));
+     const proc = spawn(ffmpegPath, args);
+     trackFfmpeg(proc);
+     proc.stderr.on("data", (d) => logDebug(`FFmpeg(rec ${cam.id}): ${d.toString().trim()}`));
     proc.on("error", (err) => logError(`Ошибка FFmpeg записи камеры ${cam.id}: ${err.message}`));
     proc.on("close", async (code) => {
       const session = activeRecordings.get(cam.id);
@@ -4054,7 +4142,7 @@ const UNKNOWN_DEBOUNCE_MS = 20_000;
 // cameraId:personKey -> последнее время события (чтобы не спамить БД)
 const lastEventAt = new Map<string, number>();
 
-function saveSnapshotFromFrame(frameBase64: string, cameraId: number, label?: string): string {
+async function saveSnapshotFromFrame(frameBase64: string, cameraId: number, label?: string): Promise<string> {
   try {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -4065,7 +4153,7 @@ function saveSnapshotFromFrame(frameBase64: string, cameraId: number, label?: st
       ? `cam${cameraId}_${dateStr}_${timeStr}_${safeLabel}.jpg`
       : `cam${cameraId}_${dateStr}_${timeStr}_Неизвестный.jpg`;
     const target = path.join(snapshotsDir, name);
-    fs.writeFileSync(target, Buffer.from(frameBase64, "base64"));
+    await fsp.writeFile(target, Buffer.from(frameBase64, "base64"));
     return `snapshots/${name}`;
   } catch (e) {
     logError(e as Error, { context: "saveSnapshotFromFrame" });
@@ -4089,7 +4177,7 @@ async function persistAndBroadcastEvent(e: {
   confirmationId?: number;
 }) {
   try {
-    await prisma.event.create({
+    const event = await prisma.event.create({
       data: {
         camera_id: e.cameraId,
         camera_name: e.cameraName,
@@ -4101,27 +4189,24 @@ async function persistAndBroadcastEvent(e: {
         person_name: e.person_name,
         person_category: e.person_category,
         person_photo_path: e.person_photo_path,
+        categoryCode: e.person_category ?? null,
         needs_operator_confirmation: e.needs_operator_confirmation ?? false,
         confirmation_status: e.confirmation_status ?? null,
         confirmation_id: e.confirmationId ?? null,
       },
     });
-    if (e.person_category !== "VIP") {
-      broadcastSecurity({
-        type: "ALERT",
-        category: (e.person_category as any) || "UNKNOWN",
-        person_id: e.personId ?? 0,
-        guest_id: e.guestId ?? null,
-        person_name: e.person_name || "Неизвестный",
-        camera_id: e.cameraId,
-        confidence: e.confidence,
-        snapshot_path: e.snapshot_path,
-        timestamp: new Date().toISOString(),
-      });
-    }
+
+    const cam = cameras.find(c => c.id === e.cameraId)
+    await emitPersonAlert({
+      person: { id: e.personId ?? 0, name: e.person_name || 'Неизвестный', categoryCode: e.person_category ?? null },
+      camera: { id: e.cameraId, name: e.cameraName, zone: cam?.zone },
+      eventId: event.id,
+      snapshotUrl: e.snapshot_path ? `/snapshots/${e.snapshot_path}` : null,
+    })
+
     broadcastSecurity({ type: "EVENT" });
   } catch (err) {
-    logError(err as Error, { context: "persist recognition event" });
+    reportError("persistAndBroadcastEvent", err, { cameraId: e.cameraId })
   }
 }
 
@@ -4129,7 +4214,7 @@ async function persistAndBroadcastEvent(e: {
 function triggerSmartRecording(cam: any) {
   if (!cam.is_smart_recording) return;
   if (activeRecordings.has(cam.id)) return; // уже пишется
-  startFileRecording(cam, 15).catch(() => {});
+  startFileRecording(cam, 15).catch((err) => reportError("smartRecording", err, { cameraId: cam.id }))
 }
 
 async function handleRecognizedEvent(cam: any, match: any, frameBase64: string) {
@@ -4140,43 +4225,47 @@ async function handleRecognizedEvent(cam: any, match: any, frameBase64: string) 
 
    const confidence = match.similarity;
    const meetsVerification = confidence * 100 >= verification_threshold_pct;
-   const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id, match.personName);
-   recordVisitor(cam.id, match.personId, match.personName, snapshot_path);
+    const snapshot_path = await saveSnapshotFromFrame(frameBase64, cam.id, match.personName);
+    await recordVisitor(cam.id, match.personId, match.personName, snapshot_path);
 
    const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
-   try {
-     await prisma.person.update({
-       where: { id: match.personId },
-       data: { visit_count: { increment: 1 }, last_seen_at: new Date() },
-     });
+    try {
+      await prisma.person.update({
+        where: { id: match.personId },
+        data: { visit_count: { increment: 1 }, last_seen_at: new Date() },
+      });
 
-     try {
-       const recentVisit = await prisma.personVisit.findFirst({
-         where: { person_id: match.personId, camera_id: cam.id },
-         orderBy: { visit_date: 'desc' },
-       });
+      try {
+        const recentVisit = await prisma.personVisit.findFirst({
+          where: { person_id: match.personId, camera_id: cam.id },
+          orderBy: { visit_date: 'desc' },
+        });
 
-       const now = Date.now();
-       const isSessionActive = recentVisit && (now - new Date(recentVisit.visit_date).getTime()) < SESSION_TIMEOUT_MS;
+        const now = Date.now();
+        const isSessionActive = recentVisit && (now - new Date(recentVisit.visit_date).getTime()) < SESSION_TIMEOUT_MS;
 
-       if (!isSessionActive) {
-         await prisma.personVisit.create({
-           data: {
-             person_id: match.personId,
-             camera_id: cam.id,
-             camera_name: cam.name,
-             confidence: confidence,
-             source: "recognition",
-           },
-         });
-         await prisma.person.update({
-           where: { id: match.personId },
-           data: { needsLoyaltyUpdate: true },
-         });
-       }
-     } catch { /* ignore */ }
-   } catch { /* ignore */ }
+        if (!isSessionActive) {
+          await prisma.personVisit.create({
+            data: {
+              person_id: match.personId,
+              camera_id: cam.id,
+              camera_name: cam.name,
+              confidence: confidence,
+              source: "recognition",
+            },
+          });
+          await prisma.person.update({
+            where: { id: match.personId },
+            data: { needsLoyaltyUpdate: true },
+          });
+        }
+      } catch (err) {
+        reportError("personVisit", err, { personId: match.personId })
+      }
+    } catch (err) {
+      reportError("handleRecognizedEvent", err, { personId: match.personId })
+    }
 
    const idx = persons.findIndex((p: any) => p.id === match.personId);
    if (idx >= 0) {
@@ -4284,7 +4373,7 @@ async function handleUnknownEvent(cam: any, frameBase64: string, face?: any) {
    }
    lastEventAt.set(debounceKey, Date.now());
 
-   const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id);
+    const snapshot_path = await saveSnapshotFromFrame(frameBase64, cam.id);
 
    let guestId: number | null = null;
    let guestName: string | null = null;
@@ -4306,7 +4395,7 @@ async function handleUnknownEvent(cam: any, frameBase64: string, face?: any) {
      }
    }
 
-   recordVisitor(cam.id, guestId, guestName || "Неизвестный", snapshot_path);
+    await recordVisitor(cam.id, guestId, guestName || "Неизвестный", snapshot_path);
 
    await persistAndBroadcastEvent({
      cameraId: cam.id,
@@ -4439,8 +4528,8 @@ async function handleConfirmationEvent(cam: any, match: any, frameBase64: string
     });
 
     // Событие в ленту (оператор видит в «Событиях»)
-    const snapshot_path = saveSnapshotFromFrame(frameBase64, cam.id, match.personName);
-    recordVisitor(cam.id, personId, match.personName, snapshot_path);
+    const snapshot_path = await saveSnapshotFromFrame(frameBase64, cam.id, match.personName);
+    await recordVisitor(cam.id, personId, match.personName, snapshot_path);
     await persistAndBroadcastEvent({
       cameraId: cam.id,
       cameraName: cam.name,
@@ -4485,7 +4574,13 @@ const cameraZoneCache = new Map<number, { zones: any[]; exclusionZones: any[] }>
 // Bounded очередь кадров для AI detection: дробим поток (25 FPS) от AI (10-12 FPS)
 // Когда очередь переполнена — выбрасываем старый кадр (FIFO), AI всегда видит свежий
 const AI_QUEUE_MAX = 3;
-const cameraFrameQueues = new Map<number, Buffer[]>();
+interface FrameQueue {
+  frames: Buffer[]
+  max: number
+  dropped: number
+  lastDropAt: number
+}
+const cameraFrameQueues = new Map<number, FrameQueue>();
 // Счётчики dropped frames для отладки/мониторинга
 const cameraDetectionDropped = new Map<number, number>();
 // Единый таймер детекции/распознавания на камеру (запускается один раз, а не на каждого клиента)
@@ -4497,7 +4592,7 @@ const cameraSessionIds = new Map<number, string>();
 // Счётчик неудачных запусков FFmpeg на камеру (для экспоненциального backoff при недоступной камере)
 const cameraFfmpegRetries = new Map<number, number>();
 // Отложенные таймеры перезапуска FFmpeg (чтобы их можно было отменить при остановке пайплайна)
-const cameraRestartTimers = new Map<number, NodeJS.Timeout>();
+const cameraRestartTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 /** Максимальное количество попыток перезапуска FFmpeg перед открытием circuit breaker. */
 const MAX_RESTART_ATTEMPTS = 10;
@@ -4505,12 +4600,13 @@ const MAX_RESTART_ATTEMPTS = 10;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
 
 /** Circuit breaker: помечает камеры, где постоянно падает FFmpeg. */
-interface CircuitBreakerEntry {
-  failures: number;
-  reason: string;
-  openedAt: number;
+interface CircuitBreaker {
+  failures: number
+  reason: string
+  state: 'closed' | 'open' | 'half-open'
+  openedAt: number
 }
-const cameraCircuitBreakers = new Map<number, CircuitBreakerEntry>();
+const cameraCircuitBreakers = new Map<number, CircuitBreaker>();
 
 // ── Zone helpers ──────────────────────────────────────────────────────────────
 
@@ -4696,8 +4792,9 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
 
   try {
     const ffmpegPath = getFfmpegPath();
-    const proc = spawn(ffmpegPath, args);
-    activeFfmpegProcesses.set(cam.id, proc);
+     const proc = spawn(ffmpegPath, args);
+     trackFfmpeg(proc);
+     activeFfmpegProcesses.set(cam.id, proc);
 
     // Session isolation: при каждом рестарте FFmpeg генерируем новый UUID.
     // При переподключении камеры старый session_id становится недействительным —
@@ -4710,7 +4807,7 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
      }
     cameraSessionIds.set(cam.id, crypto.randomUUID());
     const sessionId = cameraSessionIds.get(cam.id)!;
-    cameraFrameQueues.set(cam.id, []);
+    cameraFrameQueues.set(cam.id, { frames: [], max: AI_QUEUE_MAX, dropped: 0, lastDropAt: 0 });
     logInfo(`FFmpeg запущен для камеры ${cam.id} (${cam.name})`, { source: cam.source, path: ffmpegPath, session_id: sessionId });
 
     // Эффективный разбор MJPEG: один растущий буфер + indexOf (без побайтовых аллокаций)
@@ -4749,12 +4846,13 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
         if (cameraFfmpegRetries.has(cam.id)) cameraFfmpegRetries.delete(cam.id);
         if (cameraCircuitBreakers.has(cam.id)) cameraCircuitBreakers.delete(cam.id);
         // Пушим кадр в bounded очередь для AI detection (drop oldest если переполнена)
-        const queue = cameraFrameQueues.get(cam.id) || [];
-        if (queue.length >= AI_QUEUE_MAX) {
-          queue.shift(); // Drop oldest frame — AI всегда видит свежие кадры
-          shared.dropped++;
+        const queue = cameraFrameQueues.get(cam.id) || { frames: [], max: AI_QUEUE_MAX, dropped: 0, lastDropAt: 0 };
+        if (queue.frames.length >= queue.max) {
+          queue.frames.shift(); // Drop oldest frame — AI всегда видит свежие кадры
+          queue.dropped++;
+          queue.lastDropAt = Date.now();
         }
-        queue.push(jpeg);
+        queue.frames.push(jpeg);
         cameraFrameQueues.set(cam.id, queue);
         acc = acc.slice(e + 2);
         headerFound = false;
@@ -4820,7 +4918,7 @@ function startCameraPipeline(cam: any, fallbackFrame: string) {
 
       // Circuit breaker: считаем неудачи
       if (!cb) {
-        cameraCircuitBreakers.set(cam.id, { failures: attempts, reason, openedAt: Date.now() });
+        cameraCircuitBreakers.set(cam.id, { failures: attempts, reason, state: 'open', openedAt: Date.now() });
       } else {
         cb.failures = attempts;
         cb.reason = reason;
@@ -4859,12 +4957,12 @@ function startCameraDetection(cam: any, fallbackFrame: string) {
     if (!shared) return;
 
     // Pop все доступные кадры из bounded очереди — берём самый свежий
-    const queue = cameraFrameQueues.get(cam.id) || [];
-    if (queue.length === 0) return;
+    const queue = cameraFrameQueues.get(cam.id) || { frames: [], max: AI_QUEUE_MAX, dropped: 0, lastDropAt: 0 };
+    if (queue.frames.length === 0) return;
     // Drop intermediate frames, оставляем только самый свежий кадр
     let buf: Buffer | null = null;
-    while (queue.length > 0) {
-      buf = queue.shift()!;
+    while (queue.frames.length > 0) {
+      buf = queue.frames.shift()!;
     }
     if (!buf) return;
 
@@ -5289,9 +5387,58 @@ app.post(["/api/persons/:id/category", "/api/persons/:id/category/"], async (req
       memPerson.category = newCode;
     }
 
+    // If person is on-site and moved to a risky category — alert immediately
+    const lvl = alertLevelFor(newCode)
+    if (lvl && lvl !== 'info') {
+      const last = await prisma.event.findFirst({
+        where: { person_id: personId },
+        orderBy: { created_at: "desc" },
+        include: { camera: true },
+      })
+      if (last && Date.now() - new Date(last.created_at).getTime() < ON_SITE_WINDOW_MS) {
+        await emitPersonAlert({
+          person: { id: personId, name: updated.name, categoryCode: newCode },
+          camera: last.camera,
+          force: true,
+          message: `Переведён в ${newCode}, пока на территории (${last.camera_name ?? 'зона ' + last.camera?.zone})`,
+        })
+      }
+    }
+
     res.json(updated);
   } catch (err) {
     logError(err as Error, { path: "/api/persons/:id/category", method: "POST" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+// ── ALERT ENGINE ENDPOINTS ────────────────────────────────────────────────────
+app.get(["/api/alerts/unacked", "/api/alerts/unacked/"], async (req, res) => {
+  try {
+    const rows = await prisma.event.findMany({
+      where: { alerted: true, alertAcked: false },
+      orderBy: { created_at: "desc" },
+      take: 50,
+      include: { person: { select: { name: true } }, camera: { select: { name: true, zone: true } } },
+    });
+    res.json(rows);
+  } catch (err) {
+    logError(err as Error, { path: "/api/alerts/unacked", method: "GET" });
+    res.status(500).json({ detail: "Internal server error" });
+  }
+});
+
+app.post(["/api/alerts/:eventId/ack", "/api/alerts/:eventId/ack/"], async (req, res) => {
+  try {
+    const eventId = parseInt(req.params.eventId);
+    const row = await prisma.event.update({
+      where: { id: eventId },
+      data: { alertAcked: true, alertAckAt: new Date() },
+    });
+    broadcastSecurity({ type: "alert-ack", eventId: row.id });
+    res.json(row);
+  } catch (err) {
+    logError(err as Error, { path: "/api/alerts/:eventId/ack", method: "POST" });
     res.status(500).json({ detail: "Internal server error" });
   }
 });
@@ -6031,6 +6178,68 @@ async function freePort(port: number): Promise<void> {
     // порт свободен или netstat недоступен — ничего не делаем
   }
 }
+
+// ═══ A. PROCESS HARDENING ═══════════════════════════════════
+
+const activeFfmpeg = new Set<ChildProcess>()
+
+/** Вызывать сразу после каждого spawn('ffmpeg', ...) */
+function trackFfmpeg(proc: ChildProcess): void {
+  activeFfmpeg.add(proc)
+  proc.on("exit", () => activeFfmpeg.delete(proc))
+  proc.on("error", () => activeFfmpeg.delete(proc))
+}
+
+function killAllFfmpeg(): void {
+  for (const p of activeFfmpeg) {
+    try { p.kill("SIGTERM") } catch { /* уже мёртв */ }
+  }
+  setTimeout(() => {
+    for (const p of activeFfmpeg) { try { p.kill("SIGKILL") } catch { /* ignore */ } }
+    activeFfmpeg.clear()
+  }, 3000).unref()
+}
+
+let shuttingDown = false
+
+async function shutdown(code: number): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log("[SHUTDOWN] Graceful shutdown started")
+
+  const force = setTimeout(() => {
+    console.error("[SHUTDOWN] Timeout 8s — force exit")
+    process.exit(code)
+  }, 8000)
+  force.unref()
+
+  for (const t of cameraRestartTimers.values()) clearTimeout(t)
+  cameraRestartTimers.clear()
+
+  killAllFfmpeg()
+
+  try { wssSecurity?.close() } catch { /* ignore */ }
+  try { wssCamera?.close() } catch { /* ignore */ }
+  try { server?.close() } catch { /* ignore */ }
+
+  try { await prisma.$disconnect() } catch (e) { console.error("[SHUTDOWN] prisma:", e) }
+
+  console.log("[SHUTDOWN] Clean exit")
+  process.exit(code)
+}
+
+process.on("SIGINT", () => void shutdown(0))
+process.on("SIGTERM", () => void shutdown(0))
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] unhandledRejection:", reason)
+  reportError("unhandledRejection", reason)
+})
+
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] uncaughtException:", err)
+  void shutdown(1)
+})
 
 async function start() {
   // Инициализация базы данных

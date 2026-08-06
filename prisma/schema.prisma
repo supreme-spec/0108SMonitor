@@ -199,6 +199,10 @@ model Event {
   needs_operator_confirmation Boolean  @default(false)
   confirmation_status         String?
   confirmation_id             Int?
+  categoryCode                String?
+  alerted                     Boolean  @default(false)
+  alertAcked                  Boolean  @default(false)
+  alertAckAt                  DateTime?
   person                      Person?  @relation(fields: [person_id], references: [id])
   guest                       Guest?   @relation(fields: [guest_id], references: [id], onDelete: Cascade)
   camera                      Camera   @relation(fields: [camera_id], references: [id], onDelete: Cascade)
@@ -208,6 +212,7 @@ model Event {
   @@index([guest_id])
   @@index([created_at])
   @@index([confirmation_id])
+  @@index([alerted, alertAcked])
 }
 
 model Recording {

@@ -9,7 +9,7 @@ import type { PersonCategory } from '../types'
 // Дефолтные категории пока API не ответил
 export const FALLBACK_CATEGORIES: PersonCategory[] = [
   { code: 'BLACKLIST', label: 'Чёрный список', color: '#ef4444', bg_color: '#450a0a', is_alert: true,  alert_sound: 'builtin', alert_volume: 1.0, detect_enabled: true,  sort_order: 1, is_system: true  },
-  { code: 'NOT_TODAY', label: 'Не сегодня',    color: '#f97316', bg_color: '#431407', is_alert: false, alert_sound: 'off',     alert_volume: 0.5, detect_enabled: true,  sort_order: 2, is_system: false },
+  { code: 'NOT_TODAY', label: 'Не сегодня',    color: '#f97316', bg_color: '#431407', is_alert: true,  alert_sound: 'builtin', alert_volume: 0.6, detect_enabled: true,  sort_order: 2, is_system: false },
   { code: 'SUITE',     label: 'Свита',          color: '#ec4899', bg_color: '#500724', is_alert: true,  alert_sound: 'builtin', alert_volume: 0.8, detect_enabled: true,  sort_order: 3, is_system: false },
   { code: 'RESPONSE',  label: 'Реагирование',  color: '#f97316', bg_color: '#431407', is_alert: true,  alert_sound: 'builtin', alert_volume: 0.9, detect_enabled: true,  sort_order: 4, is_system: true  },
   { code: 'VIP',       label: 'VIP',            color: '#a855f7', bg_color: '#2e1065', is_alert: true,  alert_sound: 'builtin', alert_volume: 0.7, detect_enabled: true,  sort_order: 5, is_system: false },

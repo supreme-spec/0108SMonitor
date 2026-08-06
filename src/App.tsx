@@ -86,6 +86,18 @@ export default function App() {
     playAlertSound(category as SoundCategory, getSoundConfigs())
   }
 
+  const playAlertTone = (level: string) => {
+    try {
+      const ctx = new AudioContext()
+      const o = ctx.createOscillator()
+      const g = ctx.createGain()
+      o.frequency.value = level === 'critical' ? 880 : 520
+      g.gain.value = level === 'critical' ? 0.25 : 0.15
+      o.connect(g); g.connect(ctx.destination)
+      o.start(); o.stop(ctx.currentTime + (level === 'critical' ? 0.6 : 0.25))
+    } catch { /* аудио недоступно */ }
+  }
+
   const { permission: notifyPermission, requestPermission, notify, resetToday } = usePushNotifications({
     enabled: notifyEnabled,
     enabledCategories,
@@ -134,7 +146,6 @@ export default function App() {
     try {
       const data = e.data
       if (data === 'pong') {
-        // Игнорируем ответ на ping
         return
       }
       const msg = JSON.parse(data)
@@ -143,15 +154,30 @@ export default function App() {
         clientLogger.info('Получен алерт', { category: alert.category, person: alert.person_name })
         setCurrentAlert(alert)
         setAlertHistory(prev => [alert, ...prev.slice(0, 49)])
-        if (alert.category === 'BLACKLIST') playSound('BLACKLIST')
-        else if (alert.category === 'VIP') playSound('VIP')
-        else if (alert.category === 'RESPONSE') playSound('RESPONSE')
-        else if (alert.category === 'SECURITY') playSound('SECURITY')
-        // Push-уведомление
+
+        // Play sound based on alert level
+        if (msg.level === 'critical') { playSound('BLACKLIST'); playAlertTone('critical') }
+        else if (msg.level === 'warning') {
+          playAlertTone('warning')
+          if (msg.categoryCode === 'NOT_TODAY') playSound('NOT_TODAY')
+          else if (msg.categoryCode === 'SUITE') playSound('SUITE')
+        }
+        else if (msg.level === 'info') {
+          // VIP — no sound
+        }
+
+        // Push notification
         notify(alert)
-        // Обновляем ленту событий при алерте
+        // Refresh events feed
+        fetchRecentEvents()
+      } else if (msg.type === 'alert-ack') {
+        window.dispatchEvent(new CustomEvent('app-alert-ack', {
+          detail: { eventId: msg.eventId },
+        }))
         fetchRecentEvents()
       } else if (msg.type === 'EVENT') {
+        fetchRecentEvents()
+      } else if (msg.type === 'CONFIRMATION') {
         // Обычное распознавание (CLIENT/STAFF) — обновляем ленту
         fetchRecentEvents()
       } else if (msg.type === 'CONFIRMATION') {
@@ -229,6 +255,10 @@ fetchRecentEvents()
   // Закрыть/снять текущий запрос подтверждения (после решения или вручную)
   const dismissConfirmation = useCallback(() => {
     setConfirmationQueue(prev => prev.slice(1))
+  }, [])
+
+  const handleAlertAck = useCallback((eventId: number) => {
+    apiFetch(`/alerts/${eventId}/ack`, { method: 'POST' }).catch(() => {})
   }, [])
 
   const renderPage = () => {
@@ -350,6 +380,7 @@ fetchRecentEvents()
       <AlertPopup
         alert={currentAlert}
         onDismiss={() => setCurrentAlert(null)}
+        onAck={handleAlertAck}
       />
 
       <ConfirmPopup

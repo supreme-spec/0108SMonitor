@@ -43,6 +43,17 @@
     0% { transform: translateY(100%); opacity: 0; }
     100% { transform: translateY(0); opacity: 1; }
   }
+
+  @keyframes alert-pulse-critical {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0); }
+    50%      { box-shadow: 0 0 0 8px rgb(239 68 68 / .35); }
+  }
+  @keyframes alert-pulse-warning {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(249 115 22 / 0); }
+    50%      { box-shadow: 0 0 0 8px rgb(249 115 22 / .3); }
+  }
+  .alert-pulse-critical { animation: alert-pulse-critical 1s ease-in-out 4; }
+  .alert-pulse-warning  { animation: alert-pulse-warning 1s ease-in-out 3; }
 }
 
 * {
