@@ -1440,11 +1440,10 @@ function PersonModal({ person, onClose, onSaved }: ModalProps) {
       const extraData = {
         name: finalName, category,
         position: position || null,
-        comment: comment || null, phone: phone || null, email: email || null,
+        comment: comment || null, phone: phone || null, email: phone || null,
         birth_date: birthDate || null, organization: organization || null,
-      address: address || null, extra_info: extraInfo || null,
-    }
-    try {
+        address: address || null, extra_info: extraInfo || null,
+      }
       if (person) {
         await apiFetch(`/persons/${person.id}`, { method: 'PUT', body: JSON.stringify(extraData) })
         if (photos.length > 0) {
@@ -1460,22 +1459,22 @@ function PersonModal({ person, onClose, onSaved }: ModalProps) {
       }
       onSaved()
     } catch (e: any) { setError(e.message) }
-    finally { setSaving(false) }
+    finally { setSaving(false); isProcessingRef.current = false }
   }
 
   const handleMergeWithExisting = async (existingPersonId: number) => {
-    // Create new person first, then merge into existing
+    if (saving || isProcessingRef.current) return
     setSaving(true); setError('')
+    isProcessingRef.current = true
     const finalName = name.trim() || (photos.length > 0
       ? photos[0].file.name.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ').trim() : '')
     try {
-      // Add photos to existing person directly
       const fd = new FormData()
       photos.forEach(p => fd.append('photos', p.file))
       await apiUpload(`/persons/${existingPersonId}/photos`, fd)
       onSaved()
     } catch (e: any) { setError(e.message) }
-    finally { setSaving(false); setDuplicateCheck(null) }
+    finally { setSaving(false); isProcessingRef.current = false; setDuplicateCheck(null) }
   }
 
   const handleForceCreate = () => {

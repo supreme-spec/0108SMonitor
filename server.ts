@@ -549,23 +549,12 @@ async function validateAndOptimizeCameras(): Promise<void> {
     }
   }
 
-  // Для RTSP/ONVIF камер устанавливаем online если они активны
-  for (const cam of cameras) {
-    if (!cam.is_active) continue;
-    const isUSB = cam.source?.startsWith("/dev/video") || cam.camera_type === "USB";
-    if (isUSB) continue;
-
-    cam.status = "online";
-    await prisma.camera.update({
-      where: { id: cam.id },
-      data: { status: "online" }
-    });
-    logInfo(`[Camera ${cam.id}] RTSP/ONVIF камера установлена как online`);
-  }
-
+  // Для RTSP/ONVIF камер НЕ перезаписываем статус при старте.
+  // Реальный статус (online / error:rtsp_timeout / error:ffmpeg_crash)
+  // устанавливается camera pipeline при попытке подключения.
   const activeUSB = cameras.filter(c => c.is_active && (c.source?.startsWith("/dev/video") || c.camera_type === "USB")).length;
   const activeRTSP = cameras.filter(c => c.is_active && !(c.source?.startsWith("/dev/video") || c.camera_type === "USB")).length;
-  logInfo(`Проверка камер завершена: ${activeUSB} USB, ${activeRTSP} RTSP/ONVIF доступно`);
+  logInfo(`Проверка камер завершена: ${activeUSB} USB, ${activeRTSP} RTSP/ONVIF в БД`);
 }
 
 app.get(["/api/cameras/scan/usb", "/api/cameras/scan/usb/"], (req, res) => {
@@ -1069,25 +1058,56 @@ app.delete(["/api/cameras/:id", "/api/cameras/:id/"], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
+    // 1. Stop WebSocket streams for this camera
     const streams = cameraStreams.get(id);
     if (streams) {
       for (const ws of streams) { try { ws.close(); } catch {} }
       cameraStreams.delete(id);
     }
 
+    // 2. Stop FFmpeg pipeline
     stopCameraPipeline(id);
 
-    // Clean up physical files (snapshots, recordings) for this camera's events/recordings
-    const [events, recordings] = await Promise.all([
-      prisma.event.findMany({ where: { camera_id: id }, select: { snapshot_path: true } }),
-      prisma.recording.findMany({ where: { camera_id: id }, select: { video_path: true } }),
-    ]);
+    // 3. Stop active file recording
+    stopFileRecording(id);
+    const recSession = activeRecordings.get(id);
+    if (recSession) {
+      try { recSession.proc.kill("SIGKILL"); } catch {}
+      activeRecordings.delete(id);
+    }
+
+    // 4. Clean up in-memory caches
+    cameraFrames.delete(id);
+    cameraFrameQueues.delete(id);
+    cameraFfmpegRetries.delete(id);
+    cameraCircuitBreakers.delete(id);
+    cameraRestartTimers.delete(id);
+    cameraSessionIds.delete(id);
+    cameraDetectionTimers.delete(id);
+    cameraZoneCache.delete(id);
+    streamSettings.delete(id);
+
+    // 5. Clean up chronicleData for this camera
+    if (chronicleData[id]) {
+      delete chronicleData[id];
+    }
+
+    // 6. Clean up recordingsData for this camera
+    if (recordingsData[id]) {
+      delete recordingsData[id];
+    }
+
+    // 7. Delete all Event records and their snapshot files
+    const events = await prisma.event.findMany({ where: { camera_id: id }, select: { snapshot_path: true } });
     for (const event of events) {
       if (event.snapshot_path) {
         const fullPath = path.join(publicDir, event.snapshot_path);
         try { if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath); } catch { /* ignore */ }
       }
     }
+
+    // 8. Delete all Recording records and their video files
+    const recordings = await prisma.recording.findMany({ where: { camera_id: id }, select: { video_path: true } });
     for (const recording of recordings) {
       if (recording.video_path) {
         const fullPath = path.join(publicDir, recording.video_path);
@@ -1095,8 +1115,37 @@ app.delete(["/api/cameras/:id", "/api/cameras/:id/"], async (req, res) => {
       }
     }
 
+    // 9. Delete temp snapshots for this camera
+    const tempSnapPath = path.join(snapshotsDir, `temp_snap_${id}.jpg`);
+    try { if (fs.existsSync(tempSnapPath)) fs.unlinkSync(tempSnapPath); } catch { /* ignore */ }
+
+    // 10. Delete snapshot files by pattern cam{id}_*.jpg
+    if (fs.existsSync(snapshotsDir)) {
+      for (const entry of fs.readdirSync(snapshotsDir)) {
+        if (entry.startsWith(`cam${id}_`) && entry.endsWith(".jpg")) {
+          try { fs.unlinkSync(path.join(snapshotsDir, entry)); } catch { /* ignore */ }
+        }
+      }
+    }
+
+    // 11. Delete recording files by pattern cam{id}_*.mp4
+    if (fs.existsSync(recordingsDir)) {
+      for (const entry of fs.readdirSync(recordingsDir)) {
+        if (entry.startsWith(`cam${id}_`) && entry.endsWith(".mp4")) {
+          try { fs.unlinkSync(path.join(recordingsDir, entry)); } catch { /* ignore */ }
+        }
+      }
+    }
+
+    // 12. Delete camera from DB
     await prisma.camera.delete({ where: { id } });
+
+    // 13. Remove from in-memory cameras array
     cameras = cameras.filter((c) => c.id !== id);
+
+    // 14. Notify all WebSocket clients
+    broadcastSecurity({ type: "CAMERA_DELETED", camera_id: id });
+
     res.json({ success: true });
   } catch (err) {
     logError(err as Error, { path: "/api/cameras/:id", method: "DELETE" });
@@ -2150,13 +2199,13 @@ app.delete(["/api/persons/:id", "/api/persons/:id/"], async (req, res) => {
     // Удаляем дескрипторы
     await unregisterFacePerson(id);
 
-    // Удаляем персону
-    await prisma.person.delete({ where: { id } });
+    // Удаляем персону (deleteMany не бросает ошибку если запись уже отсутствует)
+    const deleted = await prisma.person.deleteMany({ where: { id } });
 
     // Sync in-memory
     persons = persons.filter((p) => p.id !== id);
 
-    res.json({ success: true });
+    res.json({ success: true, deleted });
   } catch (err) {
     logError(err as Error, { path: "/api/persons/:id", method: "DELETE" });
     res.status(404).json({ detail: "Person not found" });
@@ -2284,11 +2333,10 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
       for (const item of intakeResult.report || []) {
         if (item.status === 'passed' && item.embedding && item.output_path) {
           try {
-            // Находим или создаём персону
             let person = await prisma.person.findFirst({
-              where: { name: { equals: personName } }
+              where: { name: personName }
             });
-            
+
             if (!person) {
               person = await prisma.person.create({
                 data: {
@@ -2299,20 +2347,32 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
                   embedding_count: 0
                 }
               });
+              logInfo(`[Bulk Import] Создана новая персона: ${personName} (ID: ${person.id})`);
+            } else {
+              logInfo(`[Bulk Import] Персона "${personName}" уже существует (ID: ${person.id}), пропускаем создание`);
             }
-            
-            // Считаем существующие фото для определения primary
+
+            const existingPhotos = await prisma.personPhoto.findMany({
+              where: { person_id: person.id },
+              select: { photo_path: true }
+            });
+            const existingPaths = new Set(existingPhotos.map(p => p.photo_path));
+            const photoPath = item.output_path.replace(/^\/?/, '');
+
+            if (existingPaths.has(photoPath)) {
+              logDebug(`[Bulk Import] Фото ${photoPath} уже есть у ${personName}, пропускаем`);
+              continue;
+            }
+
             const photoCount = await prisma.personPhoto.count({ where: { person_id: person.id } });
-            
-            // Сохраняем фото и эмбеддинг через существующую функцию
             const saveResult = await addEmbeddingToPerson(
               person.id,
               person.name,
               person.category,
-              item.output_path.replace(/^\/?/, ''), // Убрать начальный слэш если есть
+              photoPath,
               item.embedding
             );
-            
+
             if (saveResult.success) {
               createdCount++;
               createdList.push({
@@ -2321,28 +2381,26 @@ app.post(["/api/persons/bulk_import", "/api/persons/bulk_import/"], upload.any()
                 embeddings: 1,
                 photo_path: item.output_path
               });
-              
-              // Обновляем количество эмбеддингов у персоны
+
               await prisma.person.update({
                 where: { id: person.id },
                 data: { embedding_count: { increment: 1 } }
               });
-              
-              // Создаем запись PersonPhoto
+
               await prisma.personPhoto.create({
                 data: {
                   person_id: person.id,
-                  photo_path: item.output_path.replace(/^\/?/, ''),
+                  photo_path: photoPath,
                   is_primary: photoCount === 0,
                   has_embedding: true,
                   source: 'bulk_import'
                 }
               });
-              
+
               if (photoCount === 0) {
                 await prisma.person.update({
                   where: { id: person.id },
-                  data: { photo_path: item.output_path.replace(/^\/?/, '') }
+                  data: { photo_path: photoPath }
                 });
               }
             } else {
@@ -2402,6 +2460,23 @@ app.get(["/api/persons/bulk_import/:job_id", "/api/persons/bulk_import/:job_id/"
   }
 });
 
+// Alias for SmartImportModal compatibility
+app.post(["/api/persons/smart_import", "/api/persons/smart_import/"], upload.any(), async (req, res) => {
+  logInfo("[Smart Import] Alias called, redirecting to bulk_import logic");
+  req.url = "/api/persons/bulk_import";
+  const bulkHandler = (app as any)._router?.stack?.find((layer: any) => {
+    const route = layer.route;
+    if (!route) return false;
+    const path = (route.path || '').toString();
+    return path.includes('bulk_import') && route.methods?.post;
+  });
+
+  if (bulkHandler && bulkHandler.route && bulkHandler.route.stack && bulkHandler.route.stack[0]) {
+    return bulkHandler.route.stack[0].handle(req, res);
+  }
+  res.status(500).json({ detail: "bulk_import handler not found" });
+});
+
 // Photo upload to person
 app.post(["/api/persons/:id/photos", "/api/persons/:id/photos/"], upload.any(), async (req, res) => {
   try {
@@ -2416,12 +2491,36 @@ app.post(["/api/persons/:id/photos", "/api/persons/:id/photos/"], upload.any(), 
       return res.status(400).json({ detail: "No file uploaded", added_embeddings: 0, total_embeddings: (person as any).photos.length });
     }
 
+    const existingPhotos = await prisma.personPhoto.findMany({
+      where: { person_id: id },
+      select: { photo_path: true }
+    });
+    const existingPaths = new Set(existingPhotos.map(p => p.photo_path));
+
+    const newFiles = files.filter(file => {
+      const potentialPath = `photos/${file.filename}`;
+      return !existingPaths.has(potentialPath);
+    });
+
+    if (newFiles.length === 0) {
+      for (const file of files) {
+        try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+      }
+      return res.json({
+        success: false,
+        detail: "Все выбранные фото уже существуют у этой персоны",
+        added: 0,
+        skipped: files.length,
+        total_embeddings: (person as any).photos.length,
+      });
+    }
+
     let added_embeddings = 0;
-    for (const f of files) {
+    for (const f of newFiles) {
       const photo_path = `photos/${f.filename}`;
       const fullPath = path.join(publicDir, photo_path);
       const regResult = await enrollPhotoWithGate(person.id, person.name, person.category, photo_path, fullPath);
-      const isPrimary = person.photos.length === 0;
+      const isPrimary = person.photos.length === 0 && added_embeddings === 0;
       await prisma.personPhoto.create({
         data: { person_id: id, photo_path, is_primary: isPrimary, has_embedding: regResult.hasEmbedding },
       });
@@ -2437,11 +2536,10 @@ app.post(["/api/persons/:id/photos", "/api/persons/:id/photos/"], upload.any(), 
     });
 
     const updated = await prisma.person.findUnique({ where: { id }, include: { photos: true } });
-    // Sync in-memory
     const idx = persons.findIndex((p) => p.id === id);
     if (idx >= 0) persons[idx] = { ...persons[idx], ...updated };
 
-    res.json({ ...updated, added_embeddings, total_embeddings: updated?.photos.length });
+    res.json({ ...updated, added_embeddings, total_embeddings: updated?.photos.length, skipped: files.length - newFiles.length });
   } catch (err) {
     logError(err as Error, { path: "/api/persons/:id/photos", method: "POST" });
     res.status(500).json({ detail: "Internal server error" });
@@ -4766,7 +4864,7 @@ function getDetectorOptionsForCamera(cam: any): { detector?: string; det_size?: 
 
 function filterFacesByZones(faces: any[], cam: any): any[] {
   const { zones, exclusionZones } = loadCameraZones(cam);
-  const detectionZones = zones.filter((z: any) => z.type === 'detection' || !z.type);
+  const detectionZones = (zones || []).filter((z: any) => z.type === 'detection' || !z.type);
 
   return faces.filter((face: any) => {
     const c = faceCenter(face);

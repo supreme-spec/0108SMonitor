@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { X, Wifi, WifiOff, RefreshCw, Play, Square, Video, Search, Eye, EyeOff, Copy, Save } from 'lucide-react'
+import { X, Wifi, WifiOff, RefreshCw, Play, Square, Video, Search, Eye, EyeOff, Copy, Save, Settings2, ArrowLeft } from 'lucide-react'
 import type { Camera } from '../types'
 import { apiFetch } from '../api/client'
 
@@ -14,9 +14,9 @@ interface StreamRow {
   sourceLabel?: 'onvif' | 'rtsp' | 'probe' | 'template' | 'manual' | 'unknown'
 }
 
-interface CameraSettingsModalProps {
+interface CameraSettingsPageProps {
   camera: Camera
-  onClose: () => void
+  onBack: () => void
   onSaved: () => void
 }
 
@@ -28,8 +28,6 @@ const RESOLUTION_PRESETS = [
   '2048x1536', '1920x1080', '1280x960', '1280x720',
   '720x576', '704x576', '640x480', '640x360', '480x360', '352x288', '320x240',
 ]
-
-type TabId = 'general' | 'passport' | 'streams'
 
 /* ================= Примитивы ================= */
 
@@ -48,11 +46,14 @@ function Field({ label, children, className = '' }: { label: string; children: R
   )
 }
 
-function Section({ title, right, children, className = '' }: { title: string; right?: React.ReactNode; children: React.ReactNode; className?: string }) {
+function Section({ title, icon: Icon, right, children, className = '' }: { title: string; icon: any; right?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <section className={'p-4 rounded-xl bg-kraken-hover border border-kraken-border ' + className}>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-kraken-text text-sm font-semibold">{title}</h3>
+        <div className="flex items-center gap-2">
+          <Icon size={16} className="text-kraken-purple" />
+          <h3 className="text-kraken-text text-sm font-semibold">{title}</h3>
+        </div>
         {right}
       </div>
       {children}
@@ -185,10 +186,9 @@ function StreamCard({ title, row, listId, canDisable = true, onChange }: {
   )
 }
 
-/* ================= Модалка ================= */
+/* ================= Страница ================= */
 
-export default function CameraSettingsModal({ camera, onClose, onSaved }: CameraSettingsModalProps) {
-  const [tab, setTab] = useState<TabId>('general')
+export default function CameraSettingsPage({ camera, onBack, onSaved }: CameraSettingsPageProps) {
   const [name, setName] = useState(camera.name)
   const [source, setSource] = useState(camera.source)
   const [zone, setZone] = useState(camera.zone ?? '')
@@ -395,305 +395,260 @@ export default function CameraSettingsModal({ camera, onClose, onSaved }: Camera
     }
   }
 
-  const tabs: { id: TabId; label: string }[] = [
-    { id: 'general', label: 'Основные' },
-    { id: 'passport', label: 'Паспорт' },
-    { id: 'streams', label: 'Потоки' },
-  ]
-
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="panel w-full max-w-4xl mx-4 animate-fade-in max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-kraken-border px-6 py-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-kraken-text font-bold text-lg">{camera.name}</h2>
-              <StatusBadge status={camera.status} />
-              <span className="text-kraken-muted text-xs">ID {camera.id} · {camera.camera_type}</span>
-            </div>
-            <RtspLine url={camera.source} />
-          </div>
-          <button onClick={onClose} className="text-kraken-muted hover:text-kraken-text transition-colors flex-shrink-0">
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex gap-1 border-b border-kraken-border px-6">
-          {tabs.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                tab === t.id
-                  ? 'border-kraken-purple text-kraken-purple'
-                  : 'border-transparent text-kraken-muted hover:text-kraken-text'
-              }`}
-            >
-              {t.label}
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 border-b border-kraken-border px-6 py-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={onBack} className="text-kraken-muted hover:text-kraken-text transition-colors flex-shrink-0 mr-2">
+              <ArrowLeft size={20} />
             </button>
-          ))}
-        </div>
-
-        {/* Error */}
-        {error && (
-          <div className="mx-6 mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
-            {error}
+            <h2 className="text-kraken-text font-bold text-lg">{camera.name}</h2>
+            <StatusBadge status={camera.status} />
+            <span className="text-kraken-muted text-xs">ID {camera.id} · {camera.camera_type}</span>
           </div>
-        )}
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
-
-          {tab === 'general' && (
-            <Section title="Основные настройки">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Название">
-                  <input className={inputCls} value={name} onChange={e => setName(e.target.value)} placeholder="Название камеры" />
-                </Field>
-                <Field label="Источник">
-                  <input className={inputCls + ' font-mono text-[11px]'} value={source} onChange={e => setSource(e.target.value)} placeholder="rtsp://..." />
-                </Field>
-                <Field label="Зона">
-                  <input className={inputCls} value={zone} onChange={e => setZone(e.target.value)} placeholder="Зона расположения" />
-                </Field>
-                <Field label="Статус">
-                  <div className="py-2"><StatusBadge status={camera.status} /></div>
-                </Field>
-                <Field label="IP адрес">
-                  <input className={inputCls + ' font-mono'} value={ipAddress} onChange={e => setIpAddress(e.target.value)} placeholder="192.168.1.100" />
-                </Field>
-                <Field label="IP порт">
-                  <input className={inputCls + ' font-mono'} value={ipPort} onChange={e => setIpPort(e.target.value)} type="number" />
-                </Field>
-                <Field label="Пользователь">
-                  <input className={inputCls} value={username} onChange={e => setUsername(e.target.value)} placeholder="username" />
-                </Field>
-                <Field label="Пароль">
-                  <input className={inputCls} value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="••••••••" />
-                </Field>
-              </div>
-
-              <div className="flex flex-wrap gap-6 mt-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={smartRec}
-                    onChange={e => setSmartRec(e.target.checked)}
-                    className="w-4 h-4 rounded border-kraken-border bg-kraken-base text-kraken-purple focus:ring-kraken-purple"
-                  />
-                  <span className="text-kraken-text text-xs">Умная запись</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={chronicle}
-                    onChange={e => setChronicle(e.target.checked)}
-                    className="w-4 h-4 rounded border-kraken-border bg-kraken-base text-kraken-purple focus:ring-kraken-purple"
-                  />
-                  <span className="text-kraken-text text-xs">Хроника</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useAnalytics}
-                    onChange={e => setUseAnalytics(e.target.checked)}
-                    className="w-4 h-4 rounded border-kraken-border bg-kraken-base text-kraken-purple focus:ring-kraken-purple"
-                  />
-                  <span className="text-kraken-text text-xs">Аналитика</span>
-                </label>
-              </div>
-            </Section>
-          )}
-
-          {tab === 'passport' && (
-            <Section
-              title="Паспорт камеры"
-              right={
-                <button type="button" className={btnGhost} onClick={handleRefreshPassport} disabled={refreshRunning}>
-                  <RefreshCw size={14} className={refreshRunning ? 'animate-spin' : ''} />
-                  {refreshRunning ? 'Обновление...' : 'Обновить паспорт'}
-                </button>
-              }
-            >
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                {camera.vendor && (
-                  <div>
-                    <span className="text-kraken-muted text-[10px]">Производитель</span>
-                    <div className="text-kraken-text font-medium">{camera.vendor}</div>
-                  </div>
-                )}
-                {camera.model_name && (
-                  <div>
-                    <span className="text-kraken-muted text-[10px]">Модель</span>
-                    <div className="text-kraken-text font-medium">{camera.model_name}</div>
-                  </div>
-                )}
-                {camera.firmware && (
-                  <div>
-                    <span className="text-kraken-muted text-[10px]">Прошивка</span>
-                    <div className="text-kraken-text font-mono">{camera.firmware}</div>
-                  </div>
-                )}
-                {camera.serial_number && (
-                  <div>
-                    <span className="text-kraken-muted text-[10px]">Серийный номер</span>
-                    <div className="text-kraken-text font-mono">{camera.serial_number}</div>
-                  </div>
-                )}
-                {camera.mac_address && (
-                  <div>
-                    <span className="text-kraken-muted text-[10px]">MAC</span>
-                    <div className="text-kraken-text font-mono">{camera.mac_address}</div>
-                  </div>
-                )}
-                <div>
-                  <span className="text-kraken-muted text-[10px]">ONVIF</span>
-                  <div className="text-kraken-text">{camera.onvif_supported ? 'Да' : 'Нет'}</div>
-                </div>
-                <div>
-                  <span className="text-kraken-muted text-[10px]">Данные</span>
-                  <div className={`text-kraken-text font-medium ${confidenceColor(camera.data_confidence)}`}>
-                    {camera.data_confidence || 'unknown'}
-                  </div>
-                </div>
-                {camera.last_verified_at && (
-                  <div className="md:col-span-3">
-                    <span className="text-kraken-muted text-[10px]">Последняя проверка</span>
-                    <div className="text-kraken-text font-mono">{new Date(camera.last_verified_at).toLocaleString()}</div>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-4">
-                <span className={labelCls}>Возможности камеры</span>
-                {passportProfiles.length > 0 ? (
-                  <ul className="mt-1 space-y-1">
-                    {passportProfiles.map((p: any) => {
-                      const res = p.resolutions?.[0] || p
-                      return (
-                        <li key={p.id} className="rounded bg-kraken-base/80 px-2 py-1 font-mono text-[11px] text-kraken-text">
-                          {p.name || p.id} — {res.label || `${res.width}x${res.height}`} — {p.codec || 'H.264'}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                ) : (
-                  <p className="text-[11px] text-kraken-muted mt-1">Профили не обнаружены. Нажмите «Обновить паспорт».</p>
-                )}
-              </div>
-
-              <div className="mt-4">
-                <Field label="Активная конфигурация (AI STREAM)">
-                  <select className={inputCls} value={aiStreamProfileId || ''} onChange={e => handleSelectAiStream(e.target.value || null)}>
-                    <option value="">— не выбран —</option>
-                    {passportProfiles.map((p: any) => {
-                      const res = p.resolutions?.[0] || p
-                      return (
-                        <option key={p.id} value={p.id}>
-                          {p.name || p.id} — {res.label || `${res.width}x${res.height}`} — {p.codec || 'H.264'}
-                        </option>
-                      )
-                    })}
-                  </select>
-                </Field>
-              </div>
-
-              {refreshSteps.length > 0 && (
-                <div className="mt-3 p-3 rounded-lg bg-kraken-base border border-kraken-border">
-                  <div className="grid grid-cols-2 gap-2">
-                    {refreshSteps.map((step, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-[10px]">
-                        <span className="text-kraken-muted">{step.label}</span>
-                        <span className={
-                          step.status === 'done' ? 'text-kraken-green' :
-                          step.status === 'error' ? 'text-red-400' :
-                          step.status === 'active' ? 'text-kraken-blue' :
-                          'text-kraken-muted'
-                        }>
-                          {step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : step.status === 'active' ? '◌' : '○'}
-                          {step.detail ? ` ${step.detail}` : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Section>
-          )}
-
-          {tab === 'streams' && (
-            <Section
-              title="Потоки"
-              right={
-                <button type="button" className={btnGhost} onClick={handlePopulateStreamSettings} disabled={streamLoading}>
-                  <Search size={14} />
-                  {streamLoading ? 'Заполнение...' : 'Заполнить из камеры'}
-                </button>
-              }
-            >
-              {streamLoading ? (
-                <div className="text-kraken-muted text-xs text-center py-4">Загрузка...</div>
-              ) : streamSettings ? (
-                <div className="flex flex-col gap-3">
-                  <StreamCard
-                    title="Строка 1 — Основной поток"
-                    row={streamSettings.row1}
-                    listId="res-main"
-                    canDisable={false}
-                    onChange={(row1) => setStreamSettings({ ...streamSettings, row1 })}
-                  />
-                  <StreamCard
-                    title="Строка 2 — Дополнительный поток"
-                    row={streamSettings.row2}
-                    listId="res-sub"
-                    onChange={(row2) => setStreamSettings({ ...streamSettings, row2 })}
-                  />
-                </div>
-              ) : (
-                <div className="text-kraken-muted text-xs text-center py-4">
-                  Нажмите «Заполнить из камеры» для получения параметров
-                </div>
-              )}
-            </Section>
-          )}
+          <RtspLine url={camera.source} />
         </div>
-
-        {/* Footer */}
-        <div className="flex gap-3 border-t border-kraken-border px-6 py-4">
-          <button
-            type="button"
-            className="flex-1 rounded-lg bg-kraken-purple hover:bg-kraken-purple-hover text-white text-sm font-semibold py-2.5 transition-colors disabled:opacity-50"
-            onClick={handleSaveAll}
-            disabled={saving}
-          >
-            <Save size={16} className="inline-block mr-2" />
-            {saving ? 'Сохранение...' : 'Сохранить'}
-          </button>
-          <button
-            type="button"
-            className="rounded-lg border border-kraken-border px-5 py-2.5 text-sm text-kraken-text hover:bg-kraken-hover transition-colors"
-            onClick={handleStartStop}
-          >
-            {camera.status === 'online' ? <><Square size={16} className="inline-block mr-2 text-kraken-red" />Остановить</> : <><Play size={16} className="inline-block mr-2 text-kraken-green" />Запустить</>}
-          </button>
-        </div>
-
-        {/* Alert Modal */}
-        {alertState?.isOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setAlertState(null)}>
-            <div className="panel p-6 w-full max-w-md mx-4 animate-fade-in" onClick={e => e.stopPropagation()}>
-              <h3 className="text-kraken-text font-bold text-lg mb-2">{alertState.title}</h3>
-              <p className="text-kraken-muted text-sm mb-4">{alertState.message}</p>
-              <button onClick={() => setAlertState(null)} className="w-full btn-primary">
-                OK
-              </button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mx-6 mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+          {error}
+        </div>
+      )}
+
+      {/* Body: two columns, no tabs */}
+      <div className="grid flex-1 grid-cols-12 gap-4 overflow-y-auto px-6 py-4">
+
+        {/* Left column */}
+        <div className="col-span-12 flex flex-col gap-4 lg:col-span-4">
+          <Section title="Основные" icon={Settings2}>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Название" className="col-span-2">
+                <input className={inputCls} value={name} onChange={e => setName(e.target.value)} placeholder="Название камеры" />
+              </Field>
+              <Field label="Зона">
+                <input className={inputCls} value={zone} onChange={e => setZone(e.target.value)} placeholder="Зона" />
+              </Field>
+              <Field label="FPS">
+                <input className={inputCls} value={camera.fps ?? ''} disabled placeholder="—" />
+              </Field>
+              <Field label="IP адрес" className="col-span-2">
+                <input className={inputCls + ' font-mono'} value={ipAddress} onChange={e => setIpAddress(e.target.value)} placeholder="192.168.1.100" />
+              </Field>
+              <Field label="IP порт">
+                <input className={inputCls + ' font-mono'} value={ipPort} onChange={e => setIpPort(e.target.value)} type="number" />
+              </Field>
+              <Field label="Ping">
+                <div className="py-2 text-xs text-kraken-text">{camera.ping_ms != null ? `${camera.ping_ms} ms` : '—'}</div>
+              </Field>
+              <Field label="Статус">
+                <div className="py-2"><StatusBadge status={camera.status} /></div>
+              </Field>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={smartRec} onChange={e => setSmartRec(e.target.checked)} className="rounded border-kraken-border bg-kraken-base text-kraken-purple focus:ring-kraken-purple" />
+                <span className="text-kraken-text text-xs">Умная запись</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={chronicle} onChange={e => setChronicle(e.target.checked)} className="rounded border-kraken-border bg-kraken-base text-kraken-purple focus:ring-kraken-purple" />
+                <span className="text-kraken-text text-xs">Хроника</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={useAnalytics} onChange={e => setUseAnalytics(e.target.checked)} className="rounded border-kraken-border bg-kraken-base text-kraken-purple focus:ring-kraken-purple" />
+                <span className="text-kraken-text text-xs">Аналитика</span>
+              </label>
+            </div>
+          </Section>
+
+          <Section
+            title="Паспорт камеры"
+            icon={Video}
+            right={
+              <button type="button" className={btnGhost} onClick={handleRefreshPassport} disabled={refreshRunning}>
+                <RefreshCw size={14} className={refreshRunning ? 'animate-spin' : ''} />
+                {refreshRunning ? 'Обновление...' : 'Обновить паспорт'}
+              </button>
+            }
+          >
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              {camera.vendor && (
+                <div>
+                  <span className="text-kraken-muted text-[10px]">Производитель</span>
+                  <div className="text-kraken-text font-medium">{camera.vendor}</div>
+                </div>
+              )}
+              {camera.model_name && (
+                <div>
+                  <span className="text-kraken-muted text-[10px]">Модель</span>
+                  <div className="text-kraken-text font-medium">{camera.model_name}</div>
+                </div>
+              )}
+              {camera.firmware && (
+                <div>
+                  <span className="text-kraken-muted text-[10px]">Прошивка</span>
+                  <div className="text-kraken-text font-mono">{camera.firmware}</div>
+                </div>
+              )}
+              {camera.serial_number && (
+                <div>
+                  <span className="text-kraken-muted text-[10px]">Серийный номер</span>
+                  <div className="text-kraken-text font-mono">{camera.serial_number}</div>
+                </div>
+              )}
+              {camera.mac_address && (
+                <div>
+                  <span className="text-kraken-muted text-[10px]">MAC</span>
+                  <div className="text-kraken-text font-mono">{camera.mac_address}</div>
+                </div>
+              )}
+              <div>
+                <span className="text-kraken-muted text-[10px]">ONVIF</span>
+                <div className="text-kraken-text">{camera.onvif_supported ? 'Да' : 'Нет'}</div>
+              </div>
+              <div>
+                <span className="text-kraken-muted text-[10px]">Данные</span>
+                <div className={`text-kraken-text font-medium ${confidenceColor(camera.data_confidence)}`}>
+                  {camera.data_confidence || 'unknown'}
+                </div>
+              </div>
+              {camera.last_verified_at && (
+                <div className="col-span-2">
+                  <span className="text-kraken-muted text-[10px]">Последняя проверка</span>
+                  <div className="text-kraken-text font-mono">{new Date(camera.last_verified_at).toLocaleString()}</div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3">
+              <span className={labelCls}>Возможности камеры</span>
+              {passportProfiles.length > 0 ? (
+                <ul className="mt-1 space-y-1">
+                  {passportProfiles.map((p: any) => {
+                    const res = p.resolutions?.[0] || p
+                    return (
+                      <li key={p.id} className="rounded bg-kraken-base/80 px-2 py-1 font-mono text-[11px] text-kraken-text">
+                        {p.name || p.id} — {res.label || `${res.width}x${res.height}`} — {p.codec || 'H.264'}
+                      </li>
+                    )
+                  })}
+                </ul>
+              ) : (
+                <p className="text-[11px] text-kraken-muted mt-1">Профили не обнаружены. Нажмите «Обновить паспорт».</p>
+              )}
+            </div>
+
+            <div className="mt-3">
+              <Field label="Активная конфигурация (AI STREAM)">
+                <select className={inputCls} value={aiStreamProfileId || ''} onChange={e => handleSelectAiStream(e.target.value || null)}>
+                  <option value="">— не выбран —</option>
+                  {passportProfiles.map((p: any) => {
+                    const res = p.resolutions?.[0] || p
+                    return (
+                      <option key={p.id} value={p.id}>
+                        {p.name || p.id} — {res.label || `${res.width}x${res.height}`} — {p.codec || 'H.264'}
+                      </option>
+                    )
+                  })}
+                </select>
+              </Field>
+            </div>
+
+            {refreshSteps.length > 0 && (
+              <div className="mt-3 p-3 rounded-lg bg-kraken-base border border-kraken-border">
+                <div className="grid grid-cols-2 gap-2">
+                  {refreshSteps.map((step, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-[10px]">
+                      <span className="text-kraken-muted">{step.label}</span>
+                      <span className={
+                        step.status === 'done' ? 'text-kraken-green' :
+                        step.status === 'error' ? 'text-red-400' :
+                        step.status === 'active' ? 'text-kraken-blue' :
+                        'text-kraken-muted'
+                      }>
+                        {step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : step.status === 'active' ? '◌' : '○'}
+                        {step.detail ? ` ${step.detail}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Section>
+        </div>
+
+        {/* Right column: streams */}
+        <div className="col-span-12 lg:col-span-8">
+          <Section title="Потоки" icon={Video} right={
+              <button type="button" className={btnGhost} onClick={handlePopulateStreamSettings} disabled={streamLoading}>
+                <Search size={14} />
+                {streamLoading ? 'Заполнение...' : 'Заполнить из камеры'}
+              </button>
+            }
+          >
+            {streamLoading ? (
+              <div className="text-kraken-muted text-xs text-center py-4">Загрузка...</div>
+            ) : streamSettings ? (
+              <div className="flex flex-col gap-3">
+                <StreamCard
+                  title="Строка 1 — Основной поток"
+                  row={streamSettings.row1}
+                  listId="res-main"
+                  canDisable={false}
+                  onChange={(row1) => setStreamSettings({ ...streamSettings, row1 })}
+                />
+                <StreamCard
+                  title="Строка 2 — Дополнительный поток"
+                  row={streamSettings.row2}
+                  listId="res-sub"
+                  onChange={(row2) => setStreamSettings({ ...streamSettings, row2 })}
+                />
+              </div>
+            ) : (
+              <div className="text-kraken-muted text-xs text-center py-4">
+                Нажмите «Заполнить из камеры» для получения параметров
+              </div>
+            )}
+          </Section>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex gap-3 border-t border-kraken-border px-6 py-4">
+        <button
+          type="button"
+          className="flex-1 rounded-lg bg-kraken-purple hover:bg-kraken-purple-hover text-white text-sm font-semibold py-2.5 transition-colors disabled:opacity-50"
+          onClick={handleSaveAll}
+          disabled={saving}
+        >
+          <Save size={16} className="inline-block mr-2" />
+          {saving ? 'Сохранение...' : 'Сохранить'}
+        </button>
+        <button
+          type="button"
+          className="rounded-lg border border-kraken-border px-5 py-2.5 text-sm text-kraken-text hover:bg-kraken-hover transition-colors"
+          onClick={handleStartStop}
+        >
+          {camera.status === 'online' ? <><Square size={16} className="inline-block mr-2 text-kraken-red" />Остановить</> : <><Play size={16} className="inline-block mr-2 text-kraken-green" />Запустить</>}
+        </button>
+      </div>
+
+      {/* Alert Modal */}
+      {alertState?.isOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setAlertState(null)}>
+          <div className="panel p-6 w-full max-w-md mx-4 animate-fade-in" onClick={e => e.stopPropagation()}>
+            <h3 className="text-kraken-text font-bold text-lg mb-2">{alertState.title}</h3>
+            <p className="text-kraken-muted text-sm mb-4">{alertState.message}</p>
+            <button onClick={() => setAlertState(null)} className="w-full btn-primary">
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

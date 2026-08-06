@@ -4,12 +4,15 @@ import type { Camera } from '../types'
 import { apiFetch } from '../api/client'
 import RoiEditor from '../components/RoiEditor'
 import ConfirmModal, { AlertModal } from '../components/ConfirmModal'
-import CameraSettingsModal from '../components/CameraSettingsModal'
 
 interface FoundUsb { index: number; source: string; name: string }
 interface FoundIp { ip: string; port: number; source: string; rtsp_base?: string; common_paths?: string[]; type: string }
 
-export default function Cameras() {
+interface CamerasProps {
+  onOpenCameraSettings?: (cameraId: number) => void
+}
+
+export default function Cameras({ onOpenCameraSettings }: CamerasProps) {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
@@ -26,9 +29,6 @@ export default function Cameras() {
 
   // ROI editor state
   const [roiCamera, setRoiCamera] = useState<Camera | null>(null)
-
-  // Edit camera state
-  const [editCamera, setEditCamera] = useState<Camera | null>(null)
 
   // Camera detail view state
   const [detailCamera, setDetailCamera] = useState<Camera | null>(null)
@@ -474,7 +474,7 @@ export default function Cameras() {
                 </>
               )}
               <button
-                onClick={() => setEditCamera(cam)}
+                onClick={() => onOpenCameraSettings?.(cam.id)}
                 className="p-1.5 rounded-lg hover:bg-kraken-hover text-kraken-muted hover:text-kraken-blue transition-colors"
                 title="Настройки камеры"
               >
@@ -509,18 +509,6 @@ export default function Cameras() {
           initialType={prefillType}
           initialName={prefillName}
         />
-      )}
-
-      {/* ── Camera settings modal ── */}
-      {editCamera && (
-        <>
-          {console.log('[Cameras] open settings modal', editCamera.id, editCamera.name)}
-          <CameraSettingsModal
-            camera={editCamera}
-            onClose={() => setEditCamera(null)}
-            onSaved={() => { setEditCamera(null); fetchCameras() }}
-          />
-        </>
       )}
 
       {/* ── ROI zone editor ── */}
@@ -637,7 +625,7 @@ export default function Cameras() {
                   ) : (
                     <button onClick={() => { handleStop(detailCamera.id); setDetailCamera(null) }} className="flex-1 bg-kraken-red/10 hover:bg-kraken-red/20 text-kraken-red text-sm py-2 rounded-lg transition-colors">Остановить</button>
                   )}
-                  <button onClick={() => { setDetailCamera(null); setEditCamera(detailCamera) }} className="btn-ghost flex-1">Редактировать</button>
+                  <button onClick={() => { setDetailCamera(null); onOpenCameraSettings?.(detailCamera.id) }} className="btn-ghost flex-1">Редактировать</button>
                 </div>
 
                 {/* Camera Passport 2.0 */}

@@ -20,6 +20,7 @@ import CategoryPage from './pages/CategoryPage'
 import Requirements from './pages/Requirements'
 import RequirementsV2 from './ui_v2/RequirementsV2'
 import Confirmations from './pages/Confirmations'
+import CameraSettingsPage from './pages/CameraSettingsPage'
 import type { Camera, KrakenEvent, AlertMessage, ConfirmationMessage, FaceDetection } from './types'
 import { apiFetch } from './api/client'
 import { wsUrl } from './api/client'
@@ -42,6 +43,17 @@ export default function App() {
   if (isProjectionScreen) return <ScreenProjection />
 
   const [page, setPage] = useState('live')
+  const [cameraSettingsId, setCameraSettingsId] = useState<number | null>(null)
+
+  const openCameraSettings = useCallback((cameraId: number) => {
+    setCameraSettingsId(cameraId)
+    setPage('camera_settings')
+  }, [])
+
+  const closeCameraSettings = useCallback(() => {
+    setCameraSettingsId(null)
+    setPage('cameras')
+  }, [])
 
   // Обработчик навигации из дочерних компонентов (например Settings → Categories)
   useEffect(() => {
@@ -295,11 +307,20 @@ fetchRecentEvents()
       case 'events':
         return <Events />
       case 'cameras':
-        return <Cameras />
-        case 'requirements':
-          return <Requirements />
-        case 'requirements_v2':
-          return <RequirementsV2 />
+        return <Cameras onOpenCameraSettings={openCameraSettings} />
+      case 'camera_settings':
+        const settingsCamera = cameras.find(c => c.id === cameraSettingsId) || null
+        return (
+          <CameraSettingsPage
+            camera={settingsCamera}
+            onBack={closeCameraSettings}
+            onSaved={() => {}}
+          />
+        )
+      case 'requirements':
+        return <Requirements />
+      case 'requirements_v2':
+        return <RequirementsV2 />
       case 'settings':
       case 'users':
       case 'notifications':
@@ -361,6 +382,7 @@ fetchRecentEvents()
           onNavigate={setPage}
           onProjection={() => setShowProjection(p => !p)}
           projectionActive={showProjection}
+          activePage={page === 'camera_settings' ? 'cameras' : undefined}
         />
 
         <div className="flex-1 flex flex-col h-full overflow-hidden relative">
