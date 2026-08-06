@@ -52,9 +52,10 @@
     0%, 100% { box-shadow: 0 0 0 0 rgb(249 115 22 / 0); }
     50%      { box-shadow: 0 0 0 8px rgb(249 115 22 / .3); }
   }
-  .alert-pulse-critical { animation: alert-pulse-critical 1s ease-in-out 4; }
-  .alert-pulse-warning  { animation: alert-pulse-warning 1s ease-in-out 3; }
 }
+
+.alert-pulse-critical { animation: alert-pulse-critical 1s ease-in-out 4; }
+.alert-pulse-warning  { animation: alert-pulse-warning 1s ease-in-out 3; }
 
 * {
   box-sizing: border-box;
