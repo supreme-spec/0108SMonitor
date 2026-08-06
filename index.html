@@ -6,8 +6,9 @@
     <title>KRAKEN</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root" style="min-height:100vh;background:#fff;"></div>
     <script type="module">
+      console.log('[HTML] global script start')
       window.onerror = (message, source, lineno, colno, error) => {
         console.error('[GLOBAL ERROR]', message, 'at', source + ':' + lineno + ':' + colno, error)
         const el = document.createElement('pre')
