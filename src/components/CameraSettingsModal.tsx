@@ -89,20 +89,22 @@ function SourceBadge({ source }: { source?: string }) {
   )
 }
 
-function RtspLine({ url }: { url: string }) {
+function RtspLine({ url }: { url?: string }) {
   const [show, setShow] = useState(false)
   const [copied, setCopied] = useState(false)
-  const masked = useMemo(() => url.replace(/(rtsp:\/\/[^:]+:)[^@]+(@)/, '$1••••••$2'), [url])
+  const safeUrl = url ?? ''
+  const masked = useMemo(() => safeUrl.replace(/(rtsp:\/\/[^:]+:)[^@]+(@)/, '$1••••••$2'), [safeUrl])
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(url)
+      await navigator.clipboard.writeText(safeUrl)
       setCopied(true)
       setTimeout(() => setCopied(false), 1200)
     } catch { /* clipboard недоступен */ }
   }
+  if (!safeUrl) return <div className="mt-1 text-[11px] text-kraken-muted">Источник не задан</div>
   return (
     <div className="mt-1 flex items-center gap-2">
-      <code className="truncate font-mono text-[11px] text-kraken-muted">{show ? url : masked}</code>
+      <code className="truncate font-mono text-[11px] text-kraken-muted">{show ? safeUrl : masked}</code>
       <button type="button" className="text-[11px] text-kraken-muted hover:text-kraken-text" onClick={() => setShow((s) => !s)}>
         {show ? 'скрыть' : 'показать'}
       </button>
