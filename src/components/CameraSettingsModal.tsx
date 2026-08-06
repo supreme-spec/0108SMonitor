@@ -183,6 +183,20 @@ function StreamCard({ title, row, listId, canDisable = true, onChange }: {
 /* ================= Модалка ================= */
 
 export default function CameraSettingsModal({ camera, onClose, onSaved }: CameraSettingsModalProps) {
+  const [renderError, setRenderError] = useState<string | null>(null)
+
+  if (renderError) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+        <div className="panel p-6 w-full max-w-md mx-4 animate-fade-in" onClick={e => e.stopPropagation()}>
+          <h3 className="text-kraken-text font-bold text-lg mb-2">Ошибка рендера</h3>
+          <pre className="text-red-400 text-xs whitespace-pre-wrap mb-4">{renderError}</pre>
+          <button onClick={onClose} className="w-full btn-primary">Закрыть</button>
+        </div>
+      </div>
+    )
+  }
+
   const [name, setName] = useState(camera.name)
   const [source, setSource] = useState(camera.source)
   const [zone, setZone] = useState(camera.zone ?? '')
@@ -389,24 +403,25 @@ export default function CameraSettingsModal({ camera, onClose, onSaved }: Camera
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="panel w-full max-w-6xl mx-4 animate-fade-in max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+  try {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+        <div className="panel w-full max-w-6xl mx-4 animate-fade-in max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-kraken-border px-6 py-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-kraken-text font-bold text-lg">{camera.name}</h2>
-              <StatusBadge status={camera.status} />
-              <span className="text-kraken-muted text-xs">ID {camera.id} · {camera.camera_type}</span>
+          {/* Header */}
+          <div className="flex items-start justify-between gap-4 border-b border-kraken-border px-6 py-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-kraken-text font-bold text-lg">{camera.name}</h2>
+                <StatusBadge status={camera.status} />
+                <span className="text-kraken-muted text-xs">ID {camera.id} · {camera.camera_type}</span>
+              </div>
+              <RtspLine url={camera.source} />
             </div>
-            <RtspLine url={camera.source} />
+            <button onClick={onClose} className="text-kraken-muted hover:text-kraken-text transition-colors flex-shrink-0">
+              <X size={20} />
+            </button>
           </div>
-          <button onClick={onClose} className="text-kraken-muted hover:text-kraken-text transition-colors flex-shrink-0">
-            <X size={20} />
-          </button>
-        </div>
 
         {/* Error */}
         {error && (
@@ -649,4 +664,8 @@ export default function CameraSettingsModal({ camera, onClose, onSaved }: Camera
       </div>
     </div>
   )
+  } catch (e) {
+    setRenderError(e instanceof Error ? e.message : String(e))
+    return null
+  }
 }

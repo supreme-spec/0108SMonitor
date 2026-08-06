@@ -513,11 +513,14 @@ export default function Cameras() {
 
       {/* ── Camera settings modal ── */}
       {editCamera && (
-        <CameraSettingsModal
-          camera={editCamera}
-          onClose={() => setEditCamera(null)}
-          onSaved={() => { setEditCamera(null); fetchCameras() }}
-        />
+        <>
+          {console.log('[Cameras] open settings modal', editCamera.id, editCamera.name)}
+          <CameraSettingsModal
+            camera={editCamera}
+            onClose={() => setEditCamera(null)}
+            onSaved={() => { setEditCamera(null); fetchCameras() }}
+          />
+        </>
       )}
 
       {/* ── ROI zone editor ── */}
