@@ -35,7 +35,6 @@ export default function People({ initialCategory }: PeopleProps = {}) {
   const [addPhotoPerson, setAddPhotoPerson] = useState<Person | null>(null)
   const [showPhotoSearch, setShowPhotoSearch] = useState(false)
   const [showBulkImport, setShowBulkImport] = useState(false)
-  const [showSmartImport, setShowSmartImport] = useState(false)
   const [showCategoryChange, setShowCategoryChange] = useState(false)
 
   // Вкладки: База лиц (database) и Ошибки эмбеддингов (failed_embeddings)
@@ -246,9 +245,6 @@ export default function People({ initialCategory }: PeopleProps = {}) {
           </button>
           <button onClick={() => setShowBulkImport(true)} className="btn-ghost flex items-center gap-1.5 text-sm py-2 px-3 flex-shrink-0 text-kraken-green hover:text-kraken-green border border-kraken-green/30 hover:border-kraken-green/60" title="Массовый импорт по фото">
             <FolderOpen size={14} /> Импорт
-          </button>
-          <button onClick={() => setShowSmartImport(true)} className="btn-ghost flex items-center gap-1.5 text-sm py-2 px-3 flex-shrink-0 text-kraken-purple hover:text-kraken-purple border border-kraken-purple/30 hover:border-kraken-purple/60" title="Умный импорт персонала">
-            <Upload size={14} /> Импорт 2
           </button>
           <button onClick={() => setShowDeleteCategory(true)} className="btn-ghost flex items-center gap-1.5 text-sm py-2 px-3 flex-shrink-0 text-kraken-red hover:text-kraken-red border border-kraken-red/30 hover:border-kraken-red/60" title="Удалить всю категорию">
             <Layers size={14} /> Категория
@@ -565,13 +561,7 @@ export default function People({ initialCategory }: PeopleProps = {}) {
           categories={categories}
 />
        )}
-       {showSmartImport && (
-         <SmartImportModal
-           onClose={() => setShowSmartImport(false)}
-           onDone={() => { setShowSmartImport(false); fetchPeople() }}
-         />
-       )}
-       {showDeleteCategory && (
+        {showDeleteCategory && (
          <DeleteCategoryModal
            categories={categories}
            onClose={() => setShowDeleteCategory(false)}
