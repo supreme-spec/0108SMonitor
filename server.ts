@@ -481,6 +481,93 @@ app.get(["/api/cameras", "/api/cameras/"], async (req, res) => {
   }
 });
 
+// ── Проверка и оптимизация камер при старте ──
+async function validateAndOptimizeCameras(): Promise<void> {
+  logInfo("Проверка доступности камер...");
+
+  const usbDevicesChecked = new Map<string, boolean>();
+
+  for (const cam of cameras) {
+    if (!cam.is_active) continue;
+
+    const isUSB = cam.source?.startsWith("/dev/video") || cam.camera_type === "USB";
+    if (!isUSB) continue;
+
+    const deviceId = cam.source?.replace("/dev/video", "") || "";
+    if (!deviceId || !/^\d+$/.test(deviceId)) continue;
+
+    if (usbDevicesChecked.has(deviceId)) {
+      const available = usbDevicesChecked.get(deviceId)!;
+      if (!available) {
+        logWarn(`[Camera ${cam.id}] USB-устройство /dev/video${deviceId} недоступно`);
+        await prisma.camera.update({
+          where: { id: cam.id },
+          data: { is_active: false, status: "offline" }
+        });
+        cam.is_active = false;
+        cam.status = "offline";
+      }
+      continue;
+    }
+
+    try {
+      const ffmpegPath = getFfmpegPath();
+      const cmd = `"${ffmpegPath}" -y -f dshow -list_devices true -i dummy 2>&1`;
+      const { stdout } = await execAsync(cmd, { timeout: 3000 });
+
+      const deviceFound = stdout.includes(`video=${deviceId}`) ||
+                          stdout.includes(`Video Device ${deviceId}`) ||
+                          stdout.includes(`USB Video Device`);
+
+      usbDevicesChecked.set(deviceId, deviceFound);
+
+      if (!deviceFound) {
+        logWarn(`[Camera ${cam.id}] USB-устройство /dev/video${deviceId} не найдено`);
+        await prisma.camera.update({
+          where: { id: cam.id },
+          data: { is_active: false, status: "offline" }
+        });
+        cam.is_active = false;
+        cam.status = "offline";
+      } else {
+        logInfo(`[Camera ${cam.id}] USB-устройство /dev/video${deviceId} найдено`);
+        cam.status = "online";
+        await prisma.camera.update({
+          where: { id: cam.id },
+          data: { status: "online" }
+        });
+      }
+    } catch {
+      logWarn(`[Camera ${cam.id}] Не удалось проверить USB-устройство`);
+      usbDevicesChecked.set(deviceId, false);
+      await prisma.camera.update({
+        where: { id: cam.id },
+        data: { is_active: false, status: "offline" }
+      });
+      cam.is_active = false;
+      cam.status = "offline";
+    }
+  }
+
+  // Для RTSP/ONVIF камер устанавливаем online если они активны
+  for (const cam of cameras) {
+    if (!cam.is_active) continue;
+    const isUSB = cam.source?.startsWith("/dev/video") || cam.camera_type === "USB";
+    if (isUSB) continue;
+
+    cam.status = "online";
+    await prisma.camera.update({
+      where: { id: cam.id },
+      data: { status: "online" }
+    });
+    logInfo(`[Camera ${cam.id}] RTSP/ONVIF камера установлена как online`);
+  }
+
+  const activeUSB = cameras.filter(c => c.is_active && (c.source?.startsWith("/dev/video") || c.camera_type === "USB")).length;
+  const activeRTSP = cameras.filter(c => c.is_active && !(c.source?.startsWith("/dev/video") || c.camera_type === "USB")).length;
+  logInfo(`Проверка камер завершена: ${activeUSB} USB, ${activeRTSP} RTSP/ONVIF доступно`);
+}
+
 app.get(["/api/cameras/scan/usb", "/api/cameras/scan/usb/"], (req, res) => {
   // Автоматическое сканирование USB-устройств требует нативных API.
   // В RC 1.0 поддерживается только ручной ввод источника (например, "0" или "/dev/video0").
@@ -1191,8 +1278,20 @@ app.post(["/api/cameras/:id/stream-settings/populate", "/api/cameras/:id/stream-
     const cam = cameras.find((c) => c.id === id);
     if (!cam) return res.status(404).json({ detail: "Camera not found" });
 
-    const { ip, port, username, password, model } = req.body || {};
-    const targetIp = ip || cam.ip_address || new URL(cam.source).hostname;
+      const { ip, port, username, password, model } = req.body || {};
+      let sourceHostname: string | null = null;
+      if (cam.source) {
+        try { sourceHostname = new URL(cam.source).hostname } catch { /* source не является валидным URL (например, /dev/video0) */ }
+      }
+      const targetIp = ip || cam.ip_address || sourceHostname;
+
+      if (!targetIp) {
+        logWarn("Не удалось определить IP камеры", { cameraId: id, cameraName: cam.name, source: cam.source });
+        return res.status(400).json({
+          detail: "Не удалось определить IP камеры. Укажите ip_address в настройках камеры.",
+          errors: ["missing_ip_address"]
+        });
+      }
     const targetPort = port || cam.ip_port || 554;
 
     const result = await autoFillCamera({
@@ -6244,6 +6343,9 @@ process.on("uncaughtException", (err) => {
 async function start() {
   // Инициализация базы данных
   await seedDatabase();
+
+  // Проверка и оптимизация камер (отключение недоступных USB-устройств)
+  await validateAndOptimizeCameras();
 
   // Подгружаем существующие записи в in-memory архив (календарь «Видеозаписи»)
   try {
