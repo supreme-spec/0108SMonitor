@@ -403,8 +403,7 @@ export default function CameraSettingsModal({ camera, onClose, onSaved }: Camera
     }
   }
 
-  try {
-    return (
+  return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
         <div className="panel w-full max-w-6xl mx-4 animate-fade-in max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
 
@@ -664,8 +663,4 @@ export default function CameraSettingsModal({ camera, onClose, onSaved }: Camera
       </div>
     </div>
   )
-  } catch (e) {
-    setRenderError(e instanceof Error ? e.message : String(e))
-    return null
-  }
 }
