@@ -8,6 +8,7 @@ import CategoryBadge from '../components/CategoryBadge'
 import { useCategories, fetchCategories, getCategoryByCode } from '../hooks/useCategories'
 import ConfirmModal, { AlertModal } from '../components/ConfirmModal'
 import CategoryChangeModal from '../components/CategoryChangeModal'
+import SmartImportModal from '../components/SmartImportModal'
 
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return '—'
@@ -35,6 +36,7 @@ export default function People({ initialCategory }: PeopleProps = {}) {
   const [addPhotoPerson, setAddPhotoPerson] = useState<Person | null>(null)
   const [showPhotoSearch, setShowPhotoSearch] = useState(false)
   const [showBulkImport, setShowBulkImport] = useState(false)
+  const [showSmartImport, setShowSmartImport] = useState(false)
   const [showCategoryChange, setShowCategoryChange] = useState(false)
 
   // Вкладки: База лиц (database) и Ошибки эмбеддингов (failed_embeddings)
@@ -245,6 +247,9 @@ export default function People({ initialCategory }: PeopleProps = {}) {
           </button>
           <button onClick={() => setShowBulkImport(true)} className="btn-ghost flex items-center gap-1.5 text-sm py-2 px-3 flex-shrink-0 text-kraken-green hover:text-kraken-green border border-kraken-green/30 hover:border-kraken-green/60" title="Массовый импорт по фото">
             <FolderOpen size={14} /> Импорт
+          </button>
+          <button onClick={() => setShowSmartImport(true)} className="btn-ghost flex items-center gap-1.5 text-sm py-2 px-3 flex-shrink-0 text-kraken-purple hover:text-kraken-purple border border-kraken-purple/30 hover:border-kraken-purple/60" title="Умный импорт персонала">
+            <Upload size={14} /> Импорт 2
           </button>
           <button onClick={() => setShowDeleteCategory(true)} className="btn-ghost flex items-center gap-1.5 text-sm py-2 px-3 flex-shrink-0 text-kraken-red hover:text-kraken-red border border-kraken-red/30 hover:border-kraken-red/60" title="Удалить всю категорию">
             <Layers size={14} /> Категория
@@ -561,7 +566,13 @@ export default function People({ initialCategory }: PeopleProps = {}) {
           categories={categories}
 />
        )}
-        {showDeleteCategory && (
+       {showSmartImport && (
+         <SmartImportModal
+           onClose={() => setShowSmartImport(false)}
+           onDone={() => { setShowSmartImport(false); fetchPeople() }}
+         />
+       )}
+       {showDeleteCategory && (
          <DeleteCategoryModal
            categories={categories}
            onClose={() => setShowDeleteCategory(false)}
@@ -1313,6 +1324,7 @@ function PersonModal({ person, onClose, onSaved }: ModalProps) {
   const [photos, setPhotos] = useState<PhotoEntry[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const isProcessingRef = useRef(false)
   const [photoTab, setPhotoTab] = useState<PhotoTab>('upload')
 
   // Duplicate check state
@@ -1398,34 +1410,38 @@ function PersonModal({ person, onClose, onSaved }: ModalProps) {
   }
 
   const handleSave = async () => {
+    if (saving || isProcessingRef.current) return
+
     const finalName = name.trim() || (photos.length > 0
       ? photos[0].file.name.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ').trim() : '')
     if (!finalName) { setError('Введите имя или добавьте фото с именем файла'); return }
-    setSaving(true); setError('')
 
-    // For NEW person: check if name already exists → ask user what to do
-    if (!person && duplicateCheck === null) {
-      try {
-        const res = await apiFetch<{ duplicate: boolean; matches: any[]; message?: string }>(`/persons/check_duplicate?name=${encodeURIComponent(finalName)}`)
-        if (res.duplicate && res.matches.length > 0) {
-          // Show duplicate dialog — don't save yet
-          setDuplicateCheck(res)
-          setSaving(false)
-          return
+    try {
+      isProcessingRef.current = true
+      setSaving(true)
+      setError('')
+
+      // For NEW person: check if name already exists → ask user what to do
+      if (!person && duplicateCheck === null) {
+        try {
+          const res = await apiFetch<{ duplicate: boolean; matches: any[]; message?: string }>(`/persons/check_duplicate?name=${encodeURIComponent(finalName)}`)
+          if (res.duplicate && res.matches.length > 0) {
+            setDuplicateCheck(res)
+            setSaving(false)
+            isProcessingRef.current = false
+            return
+          }
+          setDuplicateCheck({ duplicate: false, matches: [] })
+        } catch (e: any) {
+          setDuplicateCheck({ duplicate: false, matches: [] })
         }
-        // No duplicate — proceed to create
-        setDuplicateCheck({ duplicate: false, matches: [] })
-      } catch (e: any) {
-        // Check failed — proceed anyway (best effort)
-        setDuplicateCheck({ duplicate: false, matches: [] })
       }
-    }
 
-    const extraData = {
-      name: finalName, category,
-      position: position || null,
-      comment: comment || null, phone: phone || null, email: email || null,
-      birth_date: birthDate || null, organization: organization || null,
+      const extraData = {
+        name: finalName, category,
+        position: position || null,
+        comment: comment || null, phone: phone || null, email: email || null,
+        birth_date: birthDate || null, organization: organization || null,
       address: address || null, extra_info: extraInfo || null,
     }
     try {
