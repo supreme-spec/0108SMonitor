@@ -404,8 +404,9 @@ export default function CameraSettingsModal({ camera, onClose, onSaved }: Camera
   }
 
   return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-        <div className="panel w-full max-w-6xl mx-4 animate-fade-in max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="panel w-full max-w-6xl mx-4 animate-fade-in max-h-[92vh] flex flex-col overflow-hidden border-2 border-green-500" onClick={e => e.stopPropagation()}>
+        <div className="bg-green-500 text-black text-xs font-bold px-3 py-1">НОВАЯ МОДАЛКА НАСТРОЕК</div>
 
           {/* Header */}
           <div className="flex items-start justify-between gap-4 border-b border-kraken-border px-6 py-4">
